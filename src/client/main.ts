@@ -1,21 +1,18 @@
 import * as THREE from 'three';
 import { navigateTo } from '@devvit/client';
-import { 
-  InitResponse, 
-  PlantTreeResponse, 
-  WaterTreeResponse, 
-  HarvestTreeResponse, 
+import {
+  InitResponse,
+  PlantTreeResponse,
+  WaterTreeResponse,
+  HarvestTreeResponse,
   BuySeedsResponse,
   BuyLandResponse,
   MovePlayerResponse,
-  GetNearbyPlayersResponse,
   GameState,
   Tree,
   TreeType,
   Player,
-  LandPlot,
-  Biome,
-  Achievement
+  ChatMessage
 } from '../shared/types/api';
 
 // UI Elements
@@ -23,9 +20,7 @@ const titleElement = document.getElementById('title') as HTMLHeadingElement;
 const resourcesElement = document.getElementById('resources') as HTMLDivElement;
 const treesElement = document.getElementById('trees') as HTMLDivElement;
 const shopElement = document.getElementById('shop') as HTMLDivElement;
-const messageElement = document.getElementById('message') as HTMLDivElement;
 const achievementsElement = document.getElementById('achievements') as HTMLDivElement;
-const playersElement = document.getElementById('players') as HTMLDivElement;
 const minimapCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
 
 // Links
@@ -50,7 +45,6 @@ let uiHidden = false;
 
 // Movement controls
 const keys: Record<string, boolean> = {};
-let isMoving = false;
 let movementThrottle = 0;
 
 // Three.js Setup
@@ -86,6 +80,7 @@ function createTerrain(): THREE.Mesh {
   
   // Get position attribute
   const positions = geometry.attributes.position;
+  if (!positions) return new THREE.Mesh();
   
   // Create height map with more dramatic terrain
   for (let i = 0; i < positions.count; i++) {
@@ -131,7 +126,6 @@ function createTerrain(): THREE.Mesh {
   // Create a more varied material
   const material = new THREE.MeshLambertMaterial({ 
     color: 0x90EE90,
-    flatShading: false,
     side: THREE.DoubleSide
   });
   
@@ -186,8 +180,51 @@ const treeGeometries = [
 ];
 
 // Player avatar geometry
-const playerGeometry = new THREE.CapsuleGeometry(0.5, 1.5, 4, 8);
+const playerGeometry = new THREE.CylinderGeometry(0.3, 0.3, 1.5, 8);
 const playerMaterial = new THREE.MeshLambertMaterial({ color: 0x4169E1 }); // Royal blue
+
+// Username label system
+const usernameLabels: Map<string, THREE.Object3D> = new Map();
+
+function createUsernameLabel(username: string, playerId: string): THREE.Object3D {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  if (!context) return new THREE.Object3D();
+
+  // Set canvas size
+  canvas.width = 256;
+  canvas.height = 64;
+
+  // Draw username background
+  context.fillStyle = 'rgba(0, 0, 0, 0.8)';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Draw username text
+  context.fillStyle = '#FFFFFF';
+  context.font = 'bold 24px Arial';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText(username, canvas.width / 2, canvas.height / 2);
+
+  // Create texture from canvas
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.needsUpdate = true;
+
+  // Create sprite material
+  const spriteMaterial = new THREE.SpriteMaterial({ 
+    map: texture,
+    transparent: true,
+    alphaTest: 0.1
+  });
+
+  // Create sprite
+  const sprite = new THREE.Sprite(spriteMaterial);
+  sprite.scale.set(4, 1, 1);
+  sprite.position.set(0, 2.5, 0);
+  sprite.userData = { playerId, username };
+
+  return sprite;
+}
 
 // Land plot geometry
 const landPlotGeometry = new THREE.PlaneGeometry(10, 10);
@@ -232,12 +269,22 @@ async function fetchInitialGameState(): Promise<void> {
       renderNearbyPlayers(data.nearbyPlayers);
       renderMinimap();
       
-      // Auto-hide UI after 3 seconds to give players time to read instructions
+      // Initialize chat
+      await loadChatMessages();
+      updateOnlineCount();
+      
+      // Start chat update interval
+      if (chatUpdateInterval) {
+        clearInterval(chatUpdateInterval);
+      }
+      chatUpdateInterval = setInterval(loadChatMessages, 2000); // Update every 2 seconds
+      
+      // Auto-hide UI after 5 seconds to give players time to read instructions
       setTimeout(() => {
         if (!uiHidden) {
           toggleUI();
         }
-      }, 3000);
+      }, 5000);
     } else {
       showMessage('Error loading game state', 'error');
     }
@@ -248,9 +295,8 @@ async function fetchInitialGameState(): Promise<void> {
 }
 
 // Update biome environment
-function updateBiomeEnvironment(biome: Biome): void {
+function updateBiomeEnvironment(biome: any): void {
   scene.background = new THREE.Color(biome.environment.skyColor);
-  groundMaterial.color = new THREE.Color(biome.environment.groundColor);
   
   // Add fog
   scene.fog = new THREE.Fog(
@@ -355,7 +401,15 @@ function renderTrees(): void {
     const material = treeMaterials[tree.type];
     const mesh = new THREE.Mesh(geometry, material);
     
-    mesh.position.set(tree.x, tree.y + geometry.parameters.height / 2, tree.z);
+    // Calculate height based on geometry type
+    let height = 0;
+    if (geometry instanceof THREE.ConeGeometry) {
+      height = geometry.parameters.height || 1;
+    } else if (geometry instanceof THREE.SphereGeometry) {
+      height = geometry.parameters.radius || 0.5;
+    }
+    
+    mesh.position.set(tree.x, tree.y + height / 2, tree.z);
     mesh.castShadow = true;
     mesh.userData = { treeId: tree.id, tree };
     
@@ -393,11 +447,14 @@ function renderLandPlots(): void {
 
 // Render nearby players
 function renderNearbyPlayers(players: Player[]): void {
-  // Clear existing player meshes
+  // Clear existing player meshes and labels
   playerMeshes.forEach(mesh => scene.remove(mesh));
   playerMeshes.clear();
+  
+  usernameLabels.forEach(label => scene.remove(label));
+  usernameLabels.clear();
 
-  // Add player meshes
+  // Add player meshes with username labels
   players.forEach(player => {
     const mesh = new THREE.Mesh(playerGeometry, playerMaterial.clone());
     mesh.position.set(player.position.x, player.position.y + 1, player.position.z);
@@ -407,6 +464,12 @@ function renderNearbyPlayers(players: Player[]): void {
     
     scene.add(mesh);
     playerMeshes.set(player.id, mesh);
+    
+    // Add username label
+    const usernameLabel = createUsernameLabel(player.username, player.id);
+    usernameLabel.position.set(player.position.x, player.position.y + 3, player.position.z);
+    scene.add(usernameLabel);
+    usernameLabels.set(player.id, usernameLabel);
   });
 }
 
@@ -492,6 +555,7 @@ function toggleUI(): void {
   uiHidden = !uiHidden;
   const toggleBtn = document.getElementById('ui-toggle-btn') as HTMLButtonElement;
   const toggleableElements = document.querySelectorAll('.ui-toggleable');
+  const overlay = document.querySelector('.overlay') as HTMLElement;
   
   if (uiHidden) {
     // Hide UI elements
@@ -500,6 +564,7 @@ function toggleUI(): void {
     });
     toggleBtn.textContent = '🎮 Show UI';
     toggleBtn.style.background = 'linear-gradient(135deg, #4CAF50, #66BB6A)';
+    overlay.classList.add('fullscreen');
   } else {
     // Show UI elements
     toggleableElements.forEach(element => {
@@ -507,18 +572,104 @@ function toggleUI(): void {
     });
     toggleBtn.textContent = '🎮 Hide UI';
     toggleBtn.style.background = 'linear-gradient(135deg, #FF6B6B, #FF8E8E)';
+    overlay.classList.remove('fullscreen');
   }
+}
+
+// Chat system
+let chatMessages: ChatMessage[] = [];
+let chatUpdateInterval: NodeJS.Timeout | null = null;
+
+// Send chat message
+async function sendChatMessage(): Promise<void> {
+  const chatInput = document.getElementById('chat-input') as HTMLInputElement;
+  const message = chatInput.value.trim();
+  
+  if (!message || !gameState || !currentPostId) return;
+  
+  try {
+    const response = await fetch('/api/send-chat-message', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        postId: currentPostId,
+        playerId: gameState.player.id,
+        message
+      })
+    });
+    
+    if (response.ok) {
+      chatInput.value = '';
+      await loadChatMessages();
+    } else {
+      showMessage('Failed to send message', 'error');
+    }
+  } catch (err) {
+    console.error('Error sending chat message:', err);
+    showMessage('Failed to send message', 'error');
+  }
+}
+
+// Load chat messages
+async function loadChatMessages(): Promise<void> {
+  try {
+    const response = await fetch('/api/chat-messages?limit=20');
+    if (response.ok) {
+      const data = await response.json();
+      chatMessages = data.messages;
+      renderChatMessages();
+    }
+  } catch (err) {
+    console.error('Error loading chat messages:', err);
+  }
+}
+
+// Render chat messages
+function renderChatMessages(): void {
+  const chatMessagesElement = document.getElementById('chat-messages') as HTMLDivElement;
+  if (!chatMessagesElement) return;
+  
+  chatMessagesElement.innerHTML = '';
+  
+  chatMessages.forEach(msg => {
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `chat-message ${msg.playerId === gameState?.player.id ? 'player' : 'other'}`;
+    
+    const timestamp = new Date(msg.timestamp).toLocaleTimeString();
+    
+    messageDiv.innerHTML = `
+      <span class="username">${msg.username}:</span>
+      <span class="message-text">${msg.message}</span>
+      <span class="timestamp">${timestamp}</span>
+    `;
+    
+    chatMessagesElement.appendChild(messageDiv);
+  });
+  
+  // Scroll to bottom
+  chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
 }
 
 // Show message to user
 function showMessage(text: string, type: 'success' | 'error' | 'info' = 'info'): void {
-  messageElement.textContent = text;
-  messageElement.className = `message ${type}`;
-  messageElement.style.display = 'block';
-  
-  setTimeout(() => {
-    messageElement.style.display = 'none';
-  }, 3000);
+  const messageElement = document.getElementById('message') as HTMLDivElement;
+  if (messageElement) {
+    messageElement.textContent = text;
+    messageElement.className = `message ${type}`;
+    messageElement.style.display = 'block';
+    
+    setTimeout(() => {
+      messageElement.style.display = 'none';
+    }, 3000);
+  }
+}
+
+// Update online count
+function updateOnlineCount(): void {
+  const onlineCountElement = document.getElementById('online-count') as HTMLSpanElement;
+  if (onlineCountElement && gameState) {
+    onlineCountElement.textContent = gameState.currentBiome.players.length.toString();
+  }
 }
 
 // Plant tree at current position
@@ -719,14 +870,18 @@ function handleTreeClick(event: PointerEvent): void {
   raycaster.setFromCamera(mouse, camera);
   const intersects = raycaster.intersectObjects(Array.from(treeMeshes.values()));
 
-  if (intersects.length > 0) {
+  if (intersects.length > 0 && intersects[0]) {
     const clickedMesh = intersects[0].object as THREE.Mesh;
-    const tree = clickedMesh.userData.tree as Tree;
+    const userData = clickedMesh.userData;
     
-    if (tree.growthStage >= 5) {
-      harvestTree(tree.id);
-    } else {
-      waterTree(tree.id);
+    if (userData && userData.tree) {
+      const tree = userData.tree as Tree;
+      
+      if (tree.growthStage >= 5) {
+        harvestTree(tree.id);
+      } else {
+        waterTree(tree.id);
+      }
     }
   }
 }
@@ -810,11 +965,37 @@ document.addEventListener('keydown', (event) => {
     event.preventDefault();
     toggleUI();
   }
+  
+  // Fullscreen with F key
+  if (event.key === 'f' || event.key === 'F') {
+    event.preventDefault();
+    toggleFullscreen();
+  }
+  
+  // Send chat message with Enter key
+  if (event.key === 'Enter') {
+    const chatInput = document.getElementById('chat-input') as HTMLInputElement;
+    if (chatInput && chatInput === document.activeElement) {
+      event.preventDefault();
+      sendChatMessage();
+    }
+  }
 });
 
 document.addEventListener('keyup', (event) => {
   keys[event.key.toLowerCase()] = false;
 });
+
+// Fullscreen functionality
+function toggleFullscreen(): void {
+  if (!document.fullscreenElement) {
+    document.documentElement.requestFullscreen().catch(err => {
+      console.log('Error attempting to enable fullscreen:', err);
+    });
+  } else {
+    document.exitFullscreen();
+  }
+}
 
 // Movement system
 function handleMovement(): void {
@@ -901,6 +1082,8 @@ window.addEventListener('pointerdown', handleTreeClick);
 (window as any).buySeeds = buySeeds;
 (window as any).buyLandAtPosition = buyLandAtPosition;
 (window as any).toggleUI = toggleUI;
+(window as any).toggleFullscreen = toggleFullscreen;
+(window as any).sendChatMessage = sendChatMessage;
 
 // Initialize and start
 void fetchInitialGameState();

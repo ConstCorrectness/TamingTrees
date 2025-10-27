@@ -77,6 +77,21 @@
         </div>
       </div>
 
+      <!-- Chat System -->
+      <div class="chat-system ui-toggleable" id="chat-system">
+        <div class="chat-header">
+          <h3>💬 Chat</h3>
+          <div class="online-count">👥 <span id="online-count">1</span> online</div>
+        </div>
+        <div class="chat-messages" id="chat-messages">
+          <!-- Messages will be populated dynamically -->
+        </div>
+        <div class="chat-input-container">
+          <input type="text" id="chat-input" placeholder="Type a message..." maxlength="200">
+          <button id="chat-send" onclick="sendChatMessage()">Send</button>
+        </div>
+      </div>
+
       <!-- Minimap -->
       <div class="minimap ui-toggleable" id="minimap">
         <div class="minimap-title">🗺️ Map</div>
@@ -94,6 +109,7 @@
         <p>• Earn achievements and level up!</p>
         <p>• Meet other players in the shared biome</p>
         <p>• Press Tab or click "Hide UI" to toggle interface</p>
+        <p>• Press F for fullscreen mode</p>
       </div>
 
       <!-- Message Display -->

@@ -33,10 +33,16 @@ export type Player = {
   level: number;
   experience: number;
   coins: number;
+  redditGold: number; // Reddit Gold for premium features
   achievements: Achievement[];
   landPlots: string[]; // Land plot IDs
   position: { x: number; y: number; z: number };
   lastActive: number;
+  premiumFeatures: {
+    speedBoost: boolean;
+    doubleXP: boolean;
+    instantGrowth: boolean;
+  };
 };
 
 export type Achievement = {
@@ -131,6 +137,7 @@ export type BuyLandResponse = {
   success: boolean;
   message: string;
   landPlot?: LandPlot;
+  achievements?: Achievement[];
 };
 
 export type MovePlayerResponse = {
@@ -138,6 +145,32 @@ export type MovePlayerResponse = {
   postId: string;
   gameState: GameState;
   position: { x: number; y: number; z: number };
+};
+
+export type ChatMessage = {
+  id: string;
+  playerId: string;
+  username: string;
+  message: string;
+  timestamp: number;
+  type: 'player' | 'system';
+};
+
+export type SendChatMessageRequest = {
+  postId: string;
+  playerId: string;
+  message: string;
+};
+
+export type SendChatMessageResponse = {
+  success: boolean;
+  message: string;
+  chatMessage?: ChatMessage;
+};
+
+export type GetChatMessagesResponse = {
+  success: boolean;
+  messages: ChatMessage[];
 };
 
 export type GetNearbyPlayersResponse = {

@@ -157,6 +157,37 @@ function generateLandPlotId(): string {
   return `land_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
+// Chat system
+let chatMessages: ChatMessage[] = [];
+
+function generateChatMessageId(): string {
+  return `chat_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+}
+
+async function addChatMessage(playerId: string, username: string, message: string, type: 'player' | 'system' = 'player'): Promise<ChatMessage> {
+  const chatMessage: ChatMessage = {
+    id: generateChatMessageId(),
+    playerId,
+    username,
+    message,
+    timestamp: Date.now(),
+    type
+  };
+  
+  chatMessages.push(chatMessage);
+  
+  // Keep only last 100 messages
+  if (chatMessages.length > 100) {
+    chatMessages = chatMessages.slice(-100);
+  }
+  
+  return chatMessage;
+}
+
+async function getRecentChatMessages(limit: number = 20): Promise<ChatMessage[]> {
+  return chatMessages.slice(-limit);
+}
+
 function getRandomPosition(): { x: number; y: number; z: number } {
   return {
     x: (Math.random() - 0.5) * BIOME_SIZE,
@@ -196,10 +227,16 @@ function getDefaultPlayer(username: string): Player {
     level: 1,
     experience: 0,
     coins: 200, // More starting coins
+    redditGold: 0, // Starting Reddit Gold
     achievements: [],
     landPlots: [],
     position: { x: 0, y: 0, z: 0 },
-    lastActive: Date.now()
+    lastActive: Date.now(),
+    premiumFeatures: {
+      speedBoost: false,
+      doubleXP: false,
+      instantGrowth: false
+    }
   };
 }
 
@@ -935,6 +972,70 @@ router.post<{ postId: string }, BuySeedsResponse | { status: string; message: st
     }
   }
 );
+
+// Chat API endpoints
+router.post('/api/send-chat-message', async (req, res): Promise<void> => {
+  try {
+    const { postId, playerId, message }: SendChatMessageRequest = req.body;
+
+    if (!postId || !playerId || !message) {
+      res.status(400).json({
+        status: 'error',
+        message: 'Missing required fields'
+      });
+      return;
+    }
+
+    if (message.length > 200) {
+      res.status(400).json({
+        status: 'error',
+        message: 'Message too long (max 200 characters)'
+      });
+      return;
+    }
+
+    const player = await getPlayer(playerId);
+    if (!player) {
+      res.status(404).json({
+        status: 'error',
+        message: 'Player not found'
+      });
+      return;
+    }
+
+    const chatMessage = await addChatMessage(playerId, player.username, message, 'player');
+
+    res.json({
+      success: true,
+      message: 'Message sent',
+      chatMessage
+    });
+  } catch (error) {
+    console.error('Error sending chat message:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to send message'
+    });
+  }
+});
+
+router.get('/api/chat-messages', async (req, res): Promise<void> => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 20;
+    const messages = await getRecentChatMessages(limit);
+
+    res.json({
+      success: true,
+      messages
+    });
+  } catch (error) {
+    console.error('Error getting chat messages:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Failed to get messages'
+    });
+  }
+});
 
 router.post('/internal/on-app-install', async (_req, res): Promise<void> => {
   try {
