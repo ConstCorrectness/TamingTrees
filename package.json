@@ -1,0 +1,72 @@
+{
+  "private": true,
+  "name": "tamingtrees",
+  "version": "1.0.0",
+  "description": "🌳 A magical 3D forest management game on Reddit",
+  "keywords": ["reddit", "devvit", "3d", "game", "forest", "trees", "multiplayer"],
+  "author": "Taming Trees Team",
+  "license": "MIT",
+  "type": "module",
+  "homepage": "https://github.com/ConstCorrectness/tamingtrees#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ConstCorrectness/tamingtrees.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ConstCorrectness/tamingtrees/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
+  },
+  "scripts": {
+    "postinstall": "npm run build",
+    "build:client": "cd src/client && vite build",
+    "build:server": "cd src/server && vite build",
+    "build": "npm run build:client && npm run build:server",
+    "check": "npm run type-check && npm run lint:fix && npm run prettier",
+    "deploy": "npm run build && devvit upload",
+    "dev": "concurrently -k -p \"[{name}]\" -n \"CLIENT,SERVER,DEVVIT\" -c \"blue,green,magenta\" \"npm run dev:client\" \"npm run dev:server\" \"npm run dev:devvit\"",
+    "dev:client": "cd src/client && vite build --watch",
+    "dev:devvit": "dotenv -e .env -- devvit playtest",
+    "dev:server": "cd src/server && vite build --watch",
+    "lint": "eslint ./src",
+    "lint:fix": "eslint --fix ./src",
+    "login": "devvit login",
+    "launch": "npm run build && npm run deploy && devvit publish",
+    "prettier": "prettier-package-json --write ./package.json && prettier --write .",
+    "type-check": "tsc --build",
+    "start": "npm run dev",
+    "test": "vitest",
+    "test:watch": "vitest --watch",
+    "clean": "rm -rf dist/ node_modules/.vite",
+    "redis:start": "docker run -d -p 6379:6379 --name tamingtrees-redis redis:alpine",
+    "redis:stop": "docker stop tamingtrees-redis && docker rm tamingtrees-redis",
+    "redis:logs": "docker logs -f tamingtrees-redis",
+    "setup": "npm install && npm run redis:start",
+    "docs": "echo '📚 Documentation available at README.md'",
+    "version": "npm run changelog && git add CHANGELOG.md",
+    "changelog": "conventional-changelog -p angular -i CHANGELOG.md -s"
+  },
+  "dependencies": {
+    "@devvit/web": "0.12.1",
+    "devvit": "0.12.1",
+    "express": "5.1.0",
+    "three": "0.178.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.23.0",
+    "@types/express": "5.0.1",
+    "@types/three": "0.137.0",
+    "concurrently": "9.1.2",
+    "dotenv-cli": "8.0.0",
+    "eslint": "9.23.0",
+    "globals": "15.15.0",
+    "prettier": "3.5.3",
+    "prettier-package-json": "2.8.0",
+    "typescript": "5.8.2",
+    "typescript-eslint": "8.29.0",
+    "vite": "6.2.4",
+    "vitest": "3.1.1"
+  }
+}

@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <link rel="stylesheet" type="text/css" href="index.css" />
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, width=device-width, height=device-height, user-scalable=0"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="full-screen" content="yes" />
+    <meta name="x5-fullscreen" content="true" />
+    <meta name="360-fullscreen" content="true" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  </head>
+  <body>
+    <canvas id="bg"></canvas>
+    <div class="overlay">
+      <h1 class="title" id="title">🌳 Taming Trees 🌳</h1>
+      
+      <!-- UI Toggle Button -->
+      <button class="ui-toggle-btn" id="ui-toggle-btn" onclick="toggleUI()">🎮 Hide UI</button>
+      
+      <!-- Resources Display -->
+      <div class="resources ui-toggleable" id="resources">
+        <div class="resource">
+          <span class="resource-icon">🌱</span>
+          <span class="resource-value">0</span>
+        </div>
+        <div class="resource">
+          <span class="resource-icon">💧</span>
+          <span class="resource-value">0</span>
+        </div>
+        <div class="resource">
+          <span class="resource-icon">🪙</span>
+          <span class="resource-value">0</span>
+        </div>
+        <div class="resource">
+          <span class="resource-icon">⭐</span>
+          <span class="resource-value">0</span>
+        </div>
+      </div>
+
+      <!-- Trees Info -->
+      <div class="trees-info ui-toggleable" id="trees">
+        <div class="tree-count">🌲 Trees: 0</div>
+        <div class="level">Level: 1</div>
+        <div class="land-count">🏡 Land: 0</div>
+      </div>
+
+      <!-- Achievements -->
+      <div class="achievements ui-toggleable" id="achievements">
+        <div class="achievements-section">
+          <h3>🏆 Achievements (0)</h3>
+          <div class="achievements-list">
+            <!-- Achievements will be populated dynamically -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Shop and Actions -->
+      <div class="shop ui-toggleable" id="shop">
+        <div class="shop-section">
+          <h3>🌱 Buy Seeds</h3>
+          <div class="seed-options">
+            <button class="seed-btn" onclick="buySeeds('oak')">Oak (10🪙)</button>
+            <button class="seed-btn" onclick="buySeeds('pine')">Pine (10🪙)</button>
+            <button class="seed-btn" onclick="buySeeds('cherry')">Cherry (10🪙)</button>
+            <button class="seed-btn" onclick="buySeeds('maple')">Maple (10🪙)</button>
+            <button class="seed-btn" onclick="buySeeds('cedar')">Cedar (10🪙)</button>
+          </div>
+        </div>
+        <div class="actions-section">
+          <button class="action-btn" onclick="plantTreeAtPosition()">🌱 Plant Tree</button>
+          <button class="action-btn" onclick="waterAllTrees()">💧 Water All</button>
+          <button class="action-btn" onclick="buyLandAtPosition()">🏡 Buy Land</button>
+        </div>
+      </div>
+
+      <!-- Minimap -->
+      <div class="minimap ui-toggleable" id="minimap">
+        <div class="minimap-title">🗺️ Map</div>
+        <div class="minimap-content">
+          <canvas id="minimap-canvas" width="200" height="200"></canvas>
+        </div>
+      </div>
+
+      <!-- Instructions -->
+      <div class="instructions ui-toggleable">
+        <p>🎮 <strong>How to Play:</strong></p>
+        <p>• Use WASD or Arrow Keys to move around</p>
+        <p>• Click trees to water them (or harvest if mature)</p>
+        <p>• Buy land plots to plant trees on</p>
+        <p>• Earn achievements and level up!</p>
+        <p>• Meet other players in the shared biome</p>
+        <p>• Press Tab or click "Hide UI" to toggle interface</p>
+      </div>
+
+      <!-- Message Display -->
+      <div class="message" id="message" style="display: none;"></div>
+
+    </div>
+    <script type="module" src="main.ts" defer></script>
+  </body>
+</html>

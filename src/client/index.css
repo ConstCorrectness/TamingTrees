@@ -1,0 +1,491 @@
+/* Global resets */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  color: #ffffff;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000000;
+}
+
+/* Three.js canvas fills the screen */
+#bg {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Overlay container sitting above the canvas */
+.overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  padding: 20px 12px;
+  pointer-events: none; /* allow clicks to pass through except on interactive elements */
+  overflow-y: auto; /* Allow scrolling if content overflows */
+  box-sizing: border-box;
+}
+
+.title {
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.2;
+  pointer-events: auto;
+  margin-bottom: 10px;
+}
+
+/* UI Toggle Button */
+.ui-toggle-btn {
+  background: linear-gradient(135deg, #FF6B6B, #FF8E8E);
+  color: white;
+  border: none;
+  padding: 10px 20px;
+  border-radius: 25px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  pointer-events: auto;
+  margin-bottom: 15px;
+  box-shadow: 0 3px 10px rgba(255, 107, 107, 0.4);
+  z-index: 1000;
+  position: relative;
+}
+
+.ui-toggle-btn:hover {
+  background: linear-gradient(135deg, #FF8E8E, #FFB6B6);
+  transform: translateY(-2px);
+  box-shadow: 0 5px 15px rgba(255, 107, 107, 0.5);
+}
+
+.ui-toggle-btn:active {
+  transform: translateY(0);
+}
+
+/* UI Elements that can be toggled */
+.ui-toggleable {
+  transition: all 0.3s ease;
+  max-width: 100%;
+}
+
+.ui-toggleable.hidden {
+  display: none !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Resources Display */
+.resources {
+  display: flex;
+  gap: 20px;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 12px 20px;
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+  margin-bottom: 10px;
+}
+
+.resource {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.resource-icon {
+  font-size: 1.5rem;
+}
+
+.resource-value {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+/* Trees Info */
+.trees-info {
+  display: flex;
+  gap: 20px;
+  background: rgba(0, 0, 0, 0.7);
+  padding: 8px 16px;
+  border-radius: 8px;
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+  margin-bottom: 10px;
+}
+
+.tree-count, .level, .land-count {
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+/* Achievements */
+.achievements {
+  background: rgba(0, 0, 0, 0.8);
+  padding: 16px;
+  border-radius: 12px;
+  backdrop-filter: blur(15px);
+  pointer-events: auto;
+  margin-bottom: 16px;
+  max-width: 400px;
+  width: 100%;
+}
+
+.achievements-section h3 {
+  font-size: 1.1rem;
+  margin-bottom: 12px;
+  color: #FFD700;
+  text-align: center;
+}
+
+.achievements-list {
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.achievement {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 215, 0, 0.1);
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 215, 0, 0.3);
+}
+
+.achievement-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+}
+
+.achievement-info {
+  flex: 1;
+}
+
+.achievement-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #FFD700;
+}
+
+.achievement-desc {
+  font-size: 0.8rem;
+  color: #ccc;
+  margin-top: 2px;
+}
+
+/* Shop */
+.shop {
+  background: rgba(0, 0, 0, 0.8);
+  padding: 20px;
+  border-radius: 16px;
+  backdrop-filter: blur(15px);
+  pointer-events: auto;
+  margin-bottom: 20px;
+  max-width: 400px;
+  width: 100%;
+}
+
+.shop-section {
+  margin-bottom: 20px;
+}
+
+.shop-section h3 {
+  font-size: 1.2rem;
+  margin-bottom: 12px;
+  color: #90EE90;
+}
+
+.seed-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.seed-btn {
+  background: linear-gradient(135deg, #4CAF50, #45a049);
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.seed-btn:hover {
+  background: linear-gradient(135deg, #45a049, #3d8b40);
+  transform: translateY(-1px);
+}
+
+.seed-btn:active {
+  transform: translateY(0);
+}
+
+.actions-section {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.action-btn {
+  background: linear-gradient(135deg, #2196F3, #1976D2);
+  color: white;
+  border: none;
+  padding: 12px 20px;
+  border-radius: 10px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex: 1;
+}
+
+.action-btn:hover {
+  background: linear-gradient(135deg, #1976D2, #1565C0);
+  transform: translateY(-2px);
+}
+
+.action-btn:active {
+  transform: translateY(0);
+}
+
+/* Minimap */
+.minimap {
+  background: rgba(0, 0, 0, 0.8);
+  padding: 12px;
+  border-radius: 8px;
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+  margin-bottom: 12px;
+  max-width: 220px;
+  width: 100%;
+}
+
+.minimap-title {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #90EE90;
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.minimap-content {
+  display: flex;
+  justify-content: center;
+}
+
+#minimap-canvas {
+  border: 2px solid rgba(144, 238, 144, 0.3);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+/* Instructions */
+.instructions {
+  background: rgba(0, 0, 0, 0.8);
+  padding: 12px;
+  border-radius: 8px;
+  backdrop-filter: blur(10px);
+  pointer-events: auto;
+  margin-bottom: 12px;
+  max-width: 380px;
+  width: 100%;
+  text-align: left;
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+}
+
+.instructions p {
+  margin-bottom: 6px;
+  font-size: 0.8rem;
+  line-height: 1.3;
+}
+
+.instructions strong {
+  color: #90EE90;
+}
+
+/* Message Display */
+.message {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(0, 0, 0, 0.9);
+  color: white;
+  padding: 16px 24px;
+  border-radius: 12px;
+  font-size: 1.1rem;
+  font-weight: 500;
+  backdrop-filter: blur(15px);
+  pointer-events: auto;
+  z-index: 1000;
+  max-width: 300px;
+  text-align: center;
+}
+
+.message.success {
+  background: rgba(76, 175, 80, 0.9);
+}
+
+.message.error {
+  background: rgba(244, 67, 54, 0.9);
+}
+
+.message.info {
+  background: rgba(33, 150, 243, 0.9);
+}
+
+/* Footer links */
+.footer {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 12px;
+  font-size: 0.9rem;
+  color: #d1d5db;
+  pointer-events: auto;
+}
+
+.docs-link {
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.divider {
+  color: rgba(255, 255, 255, 0.25);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .overlay {
+    padding: 10px 8px;
+    gap: 6px;
+    justify-content: flex-start;
+    align-items: center;
+  }
+  
+  .title {
+    font-size: 1.2rem;
+    margin-bottom: 6px;
+  }
+  
+  .ui-toggle-btn {
+    padding: 8px 16px;
+    font-size: 0.9rem;
+    margin-bottom: 8px;
+  }
+  
+  .resources {
+    gap: 8px;
+    padding: 6px 8px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: 95%;
+  }
+  
+  .resource {
+    min-width: 50px;
+    font-size: 0.8rem;
+  }
+  
+  .trees-info {
+    gap: 8px;
+    padding: 6px 8px;
+    margin-bottom: 4px;
+    flex-wrap: wrap;
+    justify-content: center;
+    max-width: 95%;
+    font-size: 0.8rem;
+  }
+  
+  .achievements {
+    padding: 8px;
+    margin-bottom: 6px;
+    max-width: 95%;
+  }
+  
+  .shop {
+    padding: 8px;
+    margin-bottom: 6px;
+    max-width: 95%;
+  }
+  
+  .seed-options {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 4px;
+  }
+  
+  .seed-btn {
+    padding: 6px 8px;
+    font-size: 0.7rem;
+  }
+  
+  .actions-section {
+    flex-direction: column;
+    gap: 4px;
+  }
+  
+  .action-btn {
+    padding: 6px 12px;
+    font-size: 0.8rem;
+  }
+  
+  .minimap {
+    padding: 6px;
+    margin-bottom: 4px;
+    max-width: 95%;
+  }
+  
+  .minimap-title {
+    font-size: 0.8rem;
+    margin-bottom: 4px;
+  }
+  
+  #minimap-canvas {
+    width: 140px;
+    height: 140px;
+  }
+  
+  .instructions {
+    padding: 6px;
+    font-size: 0.7rem;
+    margin-bottom: 4px;
+    max-width: 95%;
+  }
+  
+  .instructions p {
+    margin-bottom: 2px;
+    font-size: 0.65rem;
+    line-height: 1.2;
+  }
+}
