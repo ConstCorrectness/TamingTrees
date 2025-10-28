@@ -15,7 +15,54 @@
   </head>
   <body>
     <div id="app">
-      <div id="game-container"></div>
+      <!-- Login Screen -->
+      <div id="login-screen" class="login-screen">
+        <div class="login-container">
+          <div class="login-header">
+            <h1 class="game-title">🌳 Taming Trees</h1>
+            <p class="game-subtitle">Grow and manage your magical forest!</p>
+          </div>
+          
+          <div class="login-form">
+            <div class="form-group">
+              <label for="username-input">Reddit Username</label>
+              <input 
+                type="text" 
+                id="username-input" 
+                placeholder="Enter your Reddit username"
+                autocomplete="username"
+              />
+            </div>
+            
+            <div class="login-buttons">
+              <button id="login-btn" class="btn btn-primary">
+                🌲 Enter Forest
+              </button>
+              <button id="create-account-btn" class="btn btn-secondary">
+                ✨ Create New Account
+              </button>
+            </div>
+            
+            <div class="login-info">
+              <p class="info-text">
+                Existing players: Your Reddit username will be auto-filled<br/>
+                New players: Create a new account to start your forest journey
+              </p>
+            </div>
+          </div>
+          
+          <div class="login-footer">
+            <p class="footer-text">
+              Built with ❤️ for the Reddit community
+            </p>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Game Container (hidden initially) -->
+      <div id="game-container" class="game-container hidden">
+        <!-- Canvas will be created here dynamically -->
+      </div>
     </div>
     <script type="module" src="main.ts" defer></script>
   </body>

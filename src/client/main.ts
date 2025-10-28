@@ -21,6 +21,15 @@ interface GameAuth {
 
 let gameAuth: GameAuth | null = null;
 
+// Global variables for mobile controls
+let isMouseDown = false;
+let lastMouseX = 0;
+let lastMouseY = 0;
+let movementJoystickActive = false;
+let cameraJoystickActive = false;
+let movementJoystickCenter = { x: 0, y: 0 };
+let cameraJoystickCenter = { x: 0, y: 0 };
+
 // Global variables
 let scene: THREE.Scene;
 let camera: THREE.PerspectiveCamera;
@@ -104,7 +113,7 @@ function handleMovement(): void {
     
     // Throttle server updates to avoid spam
     movementThrottle++;
-    if (movementThrottle >= 10) { // Update server every 10 frames
+    if (movementThrottle >= 30) { // Update server every 30 frames (0.5 seconds at 60fps)
       movementThrottle = 0;
       movePlayer(newX, 0, newZ);
     }
@@ -122,31 +131,43 @@ function renderMinimap(): void {
   ctx.fillRect(0, 0, minimapCanvas.width, minimapCanvas.height);
 
   const canvasSize = 150; // Canvas size
-  const gridSize = 20; // Size of each grid cell (20x20 tiles)
-  const cellsPerSide = 2; // Show 2x2 grid
-  const totalGridSize = gridSize * cellsPerSide; // 40x40 tiles
+  const viewRadius = 20; // Show 20 tiles radius around player (40x40 total)
   
   // Get player position
   const playerX = playerAvatar?.position.x || 0;
   const playerZ = playerAvatar?.position.z || 0;
   
-  // Calculate grid boundaries around player
-  const gridStartX = Math.floor(playerX / gridSize) * gridSize;
-  const gridStartZ = Math.floor(playerZ / gridSize) * gridSize;
-  const gridEndX = gridStartX + totalGridSize;
-  const gridEndZ = gridStartZ + totalGridSize;
+  // Calculate view boundaries (smooth, not grid-based)
+  const viewStartX = playerX - viewRadius;
+  const viewStartZ = playerZ - viewRadius;
+  const viewEndX = playerX + viewRadius;
+  const viewEndZ = playerZ + viewRadius;
   
   // Scale factor for rendering
-  const scale = canvasSize / totalGridSize;
+  const scale = canvasSize / (viewRadius * 2);
   
-  // Draw roads (main paths)
+  // Calculate region and forest info
+  const regionSize = 200; // Each region is 200x200 tiles
+  const forestSize = 50;  // Each forest is 50x50 tiles
+  
+  const regionX = Math.floor(playerX / regionSize);
+  const regionZ = Math.floor(playerZ / regionSize);
+  const forestX = Math.floor(playerX / forestSize);
+  const forestZ = Math.floor(playerZ / forestSize);
+  
+  const regionStartX = regionX * regionSize;
+  const regionStartZ = regionZ * regionSize;
+  const forestStartX = forestX * forestSize;
+  const forestStartZ = forestZ * forestSize;
+  
+  // Draw roads (main paths every 50 tiles)
   ctx.strokeStyle = 'rgba(139, 69, 19, 0.8)'; // Brown roads
   ctx.lineWidth = 2;
   
-  // Horizontal roads every 40 tiles
-  for (let x = gridStartX; x <= gridEndX; x += 40) {
-    if (x >= gridStartX && x <= gridEndX) {
-      const roadX = (x - gridStartX) * scale;
+  // Horizontal roads
+  for (let x = Math.floor(viewStartX / 50) * 50; x <= viewEndX; x += 50) {
+    const roadX = (x - viewStartX) * scale;
+    if (roadX >= 0 && roadX <= canvasSize) {
       ctx.beginPath();
       ctx.moveTo(roadX, 0);
       ctx.lineTo(roadX, canvasSize);
@@ -154,10 +175,10 @@ function renderMinimap(): void {
     }
   }
   
-  // Vertical roads every 40 tiles
-  for (let z = gridStartZ; z <= gridEndZ; z += 40) {
-    if (z >= gridStartZ && z <= gridEndZ) {
-      const roadZ = (z - gridStartZ) * scale;
+  // Vertical roads
+  for (let z = Math.floor(viewStartZ / 50) * 50; z <= viewEndZ; z += 50) {
+    const roadZ = (z - viewStartZ) * scale;
+    if (roadZ >= 0 && roadZ <= canvasSize) {
       ctx.beginPath();
       ctx.moveTo(0, roadZ);
       ctx.lineTo(canvasSize, roadZ);
@@ -165,35 +186,39 @@ function renderMinimap(): void {
     }
   }
   
-  // Draw grid lines
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+  // Draw forest boundaries (every 50 tiles)
+  ctx.strokeStyle = 'rgba(0, 255, 0, 0.3)'; // Green forest boundaries
   ctx.lineWidth = 1;
   
-  // Vertical grid lines
-  for (let i = 0; i <= cellsPerSide; i++) {
-    const x = i * gridSize * scale;
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, canvasSize);
-    ctx.stroke();
+  // Horizontal forest lines
+  for (let x = Math.floor(viewStartX / 50) * 50; x <= viewEndX; x += 50) {
+    const forestX = (x - viewStartX) * scale;
+    if (forestX >= 0 && forestX <= canvasSize) {
+      ctx.beginPath();
+      ctx.moveTo(forestX, 0);
+      ctx.lineTo(forestX, canvasSize);
+      ctx.stroke();
+    }
   }
   
-  // Horizontal grid lines
-  for (let i = 0; i <= cellsPerSide; i++) {
-    const y = i * gridSize * scale;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(canvasSize, y);
-    ctx.stroke();
+  // Vertical forest lines
+  for (let z = Math.floor(viewStartZ / 50) * 50; z <= viewEndZ; z += 50) {
+    const forestZ = (z - viewStartZ) * scale;
+    if (forestZ >= 0 && forestZ <= canvasSize) {
+      ctx.beginPath();
+      ctx.moveTo(0, forestZ);
+      ctx.lineTo(canvasSize, forestZ);
+      ctx.stroke();
+    }
   }
   
   // Draw land plots in this area
   gameState.currentBiome.landPlots.forEach((plot: any) => {
-    if (plot.x >= gridStartX && plot.x < gridEndX && 
-        plot.z >= gridStartZ && plot.z < gridEndZ) {
-      const x = (plot.x - gridStartX) * scale;
-      const y = (plot.z - gridStartZ) * scale;
-      const size = 10 * scale; // Plot size scaled down
+    if (plot.x >= viewStartX && plot.x < viewEndX && 
+        plot.z >= viewStartZ && plot.z < viewEndZ) {
+      const x = (plot.x - viewStartX) * scale;
+      const y = (plot.z - viewStartZ) * scale;
+      const size = 8 * scale; // Plot size scaled down
 
       ctx.fillStyle = plot.ownerId === gameState!.player.id ? '#90EE90' : '#FFB6C1';
       ctx.fillRect(x - size/2, y - size/2, size, size);
@@ -207,56 +232,56 @@ function renderMinimap(): void {
 
   // Draw trees with enhanced color coding
   gameState.trees.forEach((tree: any) => {
-    if (tree.x >= gridStartX && tree.x < gridEndX && 
-        tree.z >= gridStartZ && tree.z < gridEndZ) {
-      const x = (tree.x - gridStartX) * scale;
-      const y = (tree.z - gridStartZ) * scale;
+    if (tree.x >= viewStartX && tree.x < viewEndX && 
+        tree.z >= viewStartZ && tree.z < viewEndZ) {
+      const x = (tree.x - viewStartX) * scale;
+      const y = (tree.z - viewStartZ) * scale;
 
       // Enhanced tree colors with different sizes
       let treeColor = '#8B4513'; // Default brown
-      let treeSize = 2;
+      let treeSize = 1.5;
       
       switch (tree.type) {
         case 'oak':
           treeColor = '#8B4513'; // Dark brown trunk
-          treeSize = 3;
+          treeSize = 2;
           break;
         case 'pine':
           treeColor = '#228B22'; // Forest green
-          treeSize = 2.5;
+          treeSize = 1.8;
           break;
         case 'cherry':
           treeColor = '#FF69B4'; // Hot pink
-          treeSize = 2.5;
+          treeSize = 1.8;
           break;
         case 'maple':
           treeColor = '#FF4500'; // Orange red
-          treeSize = 3;
+          treeSize = 2;
           break;
         case 'birch':
           treeColor = '#F5F5DC'; // Beige
-          treeSize = 2;
+          treeSize = 1.5;
           break;
         case 'willow':
           treeColor = '#9ACD32'; // Yellow green
-          treeSize = 2.5;
+          treeSize = 1.8;
           break;
         case 'cedar':
           treeColor = '#2F4F4F'; // Dark slate gray
-          treeSize = 3;
+          treeSize = 2;
           break;
         case 'apple':
           treeColor = '#32CD32'; // Lime green
-          treeSize = 2.5;
+          treeSize = 1.8;
           break;
         default:
           treeColor = '#FFD700'; // Gold for unknown types
-          treeSize = 2;
+          treeSize = 1.5;
       }
       
       // Draw tree with glow effect
       ctx.shadowColor = treeColor;
-      ctx.shadowBlur = 3;
+      ctx.shadowBlur = 2;
       ctx.fillStyle = treeColor;
       ctx.beginPath();
       ctx.arc(x, y, treeSize, 0, Math.PI * 2);
@@ -267,8 +292,8 @@ function renderMinimap(): void {
 
   // Draw player with enhanced indicator
   if (playerAvatar) {
-    const x = (playerAvatar.position.x - gridStartX) * scale;
-    const y = (playerAvatar.position.z - gridStartZ) * scale;
+    const x = canvasSize / 2; // Always center the player
+    const y = canvasSize / 2;
     
     // Player body
     ctx.fillStyle = '#FF0000';
@@ -308,21 +333,23 @@ function renderMinimap(): void {
   
   // Draw coordinates with better styling
   ctx.fillStyle = 'white';
-  ctx.font = 'bold 10px Arial';
+  ctx.font = 'bold 9px Arial';
   ctx.textAlign = 'left';
   ctx.shadowColor = 'black';
   ctx.shadowBlur = 2;
   
-  // Top-left corner coordinates
-  ctx.fillText(`(${gridStartX}, ${gridStartZ})`, 2, 12);
+  // Region and Forest info
+  ctx.fillText(`Region: (${regionX}, ${regionZ})`, 2, 12);
+  ctx.fillText(`Forest: (${forestX}, ${forestZ})`, 2, 24);
   
-  // Bottom-right corner coordinates
+  // Relative coordinates (within current view)
+  const relativeX = Math.floor(playerX - viewStartX);
+  const relativeZ = Math.floor(playerZ - viewStartZ);
+  ctx.fillText(`Rel: (${relativeX}, ${relativeZ})`, 2, 36);
+  
+  // Absolute world coordinates
   ctx.textAlign = 'right';
-  ctx.fillText(`(${gridEndX}, ${gridEndZ})`, canvasSize - 2, canvasSize - 2);
-  
-  // Player coordinates
-  ctx.textAlign = 'center';
-  ctx.fillText(`You: (${Math.floor(playerX)}, ${Math.floor(playerZ)})`, canvasSize / 2, canvasSize - 2);
+  ctx.fillText(`World: (${Math.floor(playerX)}, ${Math.floor(playerZ)})`, canvasSize - 2, canvasSize - 2);
   
   // Reset shadow
   ctx.shadowBlur = 0;
@@ -343,19 +370,14 @@ function triggerResize(): void {
 }
 
 function toggleUI(): void {
-  console.log('Toggle UI called');
   const toggleableElements = document.querySelectorAll('.ui-toggleable');
-  console.log('Found toggleable elements:', toggleableElements.length);
   const isHidden = toggleableElements[0]?.classList.contains('hidden');
-  console.log('Is hidden:', isHidden);
   
   toggleableElements.forEach(element => {
     if (isHidden) {
       element.classList.remove('hidden');
-      console.log('Showing element:', element);
     } else {
       element.classList.add('hidden');
-      console.log('Hiding element:', element);
     }
   });
   
@@ -387,7 +409,7 @@ function animate(): void {
   handleMovement();
   
   // Render minimap (throttled)
-  if (movementThrottle % 10 === 0) {
+  if (movementThrottle % 30 === 0) {
     renderMinimap();
   }
   movementThrottle++;
@@ -402,6 +424,12 @@ function animate(): void {
 function createUI(): void {
   const gameContainer = document.getElementById('game-container');
   if (!gameContainer) return;
+
+  // Check if UI already exists
+  if (gameContainer.querySelector('#game-canvas')) {
+    console.log('UI already exists, skipping creation');
+    return;
+  }
 
   // Create canvas
   const canvas = document.createElement('canvas');
@@ -729,6 +757,12 @@ function createUI(): void {
 
 // Initialize Three.js
 function initThreeJS(): void {
+  // Check if Three.js is already initialized
+  if (scene && camera && renderer) {
+    console.log('Three.js already initialized, skipping');
+    return;
+  }
+
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
   if (!canvas) {
     console.error('Canvas not found');
@@ -1414,7 +1448,7 @@ function handleCanvasClick(event: MouseEvent): void {
   const mouse = new THREE.Vector2();
   mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
   mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-  
+
   const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(mouse, camera);
   
@@ -1457,6 +1491,131 @@ function toggleFullscreen(): void {
 (window as any).toggleFullscreen = toggleFullscreen;
 (window as any).sendChatMessage = sendChatMessage;
 
+// Login screen functionality
+function showLoginScreen(): void {
+  const loginScreen = document.getElementById('login-screen');
+  const gameContainer = document.getElementById('game-container');
+  
+  if (loginScreen && gameContainer) {
+    loginScreen.classList.remove('hidden');
+    gameContainer.classList.add('hidden');
+  }
+}
+
+function hideLoginScreen(): void {
+  const loginScreen = document.getElementById('login-screen');
+  const gameContainer = document.getElementById('game-container');
+  
+  if (loginScreen && gameContainer) {
+    loginScreen.classList.add('hidden');
+    gameContainer.classList.remove('hidden');
+  }
+}
+
+function setupLoginHandlers(): void {
+  const usernameInput = document.getElementById('username-input') as HTMLInputElement;
+  const loginBtn = document.getElementById('login-btn');
+  const createAccountBtn = document.getElementById('create-account-btn');
+  
+  // Auto-fill username if available from Devvit context
+  if (gameAuth?.username) {
+    usernameInput.value = gameAuth.username;
+  }
+  
+  // Login button handler
+  loginBtn?.addEventListener('click', async () => {
+    const username = usernameInput.value.trim();
+    if (!username) {
+      alert('Please enter your Reddit username');
+      return;
+    }
+    
+    // Validate username format (basic Reddit username validation)
+    if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
+      alert('Please enter a valid Reddit username (letters, numbers, underscores, and hyphens only)');
+      return;
+    }
+    
+    try {
+      // Show loading state
+      loginBtn.textContent = '🌲 Entering Forest...';
+      loginBtn.disabled = true;
+      
+      // Initialize game with username
+      await initGameWithUsername(username);
+      
+      // Hide login screen and show game
+      hideLoginScreen();
+      
+    } catch (error) {
+      console.error('Login failed:', error);
+      alert('Failed to enter the forest. Please try again.');
+      
+      // Reset button state
+      loginBtn.textContent = '🌲 Enter Forest';
+      loginBtn.disabled = false;
+    }
+  });
+  
+  // Create account button handler
+  createAccountBtn?.addEventListener('click', async () => {
+    const username = usernameInput.value.trim();
+    if (!username) {
+      alert('Please enter your desired Reddit username');
+      return;
+    }
+    
+    // Validate username format
+    if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
+      alert('Please enter a valid Reddit username (letters, numbers, underscores, and hyphens only)');
+      return;
+    }
+    
+    try {
+      // Show loading state
+      createAccountBtn.textContent = '✨ Creating Account...';
+      createAccountBtn.disabled = true;
+      
+      // Initialize game with new username
+      await initGameWithUsername(username, true);
+      
+      // Hide login screen and show game
+      hideLoginScreen();
+      
+    } catch (error) {
+      console.error('Account creation failed:', error);
+      alert('Failed to create account. Please try again.');
+      
+      // Reset button state
+      createAccountBtn.textContent = '✨ Create New Account';
+      createAccountBtn.disabled = false;
+    }
+  });
+  
+  // Enter key handler for username input
+  usernameInput?.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      loginBtn?.click();
+    }
+  });
+}
+
+async function initGameWithUsername(username: string, isNewUser: boolean = false): Promise<void> {
+  // Update gameAuth with the username
+  gameAuth = {
+    username: username,
+    authToken: gameAuth?.authToken || 'dev_token'
+  };
+  
+  console.log(`${isNewUser ? 'Creating new account' : 'Logging in'} for user:`, username);
+  
+  // Create UI first, then initialize Three.js, then start the game
+  createUI();
+  initThreeJS();
+  await fetchInitialGameState();
+animate();
+}
+
 // Initialize and start
 if (typeof window !== 'undefined') {
   // Check for authentication data from URL parameters (Devvit iframe mode)
@@ -1465,19 +1624,22 @@ if (typeof window !== 'undefined') {
   const auth = urlParams.get('auth');
   
   if (user && auth) {
-    // Devvit iframe mode with authentication
+    // Devvit iframe mode with authentication - show login screen first
     console.log('Running in Devvit iframe mode with auth:', { user, auth });
-    void initGame({ username: user, authToken: auth });
+    gameAuth = { username: user, authToken: auth };
+    setupLoginHandlers();
+    showLoginScreen();
   } else if ((window as any).gameAuth) {
-    // Direct authentication object
+    // Direct authentication object - show login screen first
     console.log('Running with direct auth object');
-    void initGame((window as any).gameAuth);
+    gameAuth = (window as any).gameAuth;
+    setupLoginHandlers();
+    showLoginScreen();
   } else {
-    // Fallback for direct access (development mode)
-    console.log('Running in fallback mode - no authentication');
-    createUI();
-    initThreeJS();
-    void fetchInitialGameState();
-animate();
+    // Fallback for direct access (development mode) - show login screen
+    console.log('Running in fallback mode - showing login screen');
+    gameAuth = null;
+    setupLoginHandlers();
+    showLoginScreen();
   }
 }

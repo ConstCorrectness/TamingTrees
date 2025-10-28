@@ -718,12 +718,10 @@ router.post<{ postId: string }, MovePlayerResponse | { status: string; message: 
   '/api/move-player',
   async (req, res): Promise<void> => {
     const { postId } = context;
+    
+    // Handle development mode without postId
     if (!postId) {
-      res.status(400).json({
-        status: 'error',
-        message: 'postId is required',
-      });
-      return;
+      console.log('Move player request in development mode - no postId available');
     }
 
     try {
@@ -756,7 +754,7 @@ router.post<{ postId: string }, MovePlayerResponse | { status: string; message: 
 
       res.json({
         type: 'move_player',
-        postId,
+        postId: postId || 'dev_post',
         gameState,
         position: { x, y, z }
       });
