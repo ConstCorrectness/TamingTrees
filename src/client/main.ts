@@ -66,36 +66,53 @@ async function initGame(auth: GameAuth): Promise<void> {
 
 // Function declarations (moved to top to avoid hoisting issues)
 function handleMovement(): void {
-  if (!playerAvatar || !gameState) return;
+  if (!playerAvatar || !gameState || !camera) return;
 
   const moveSpeed = 0.5; // Slower movement for massive world
   let moved = false;
   let newX = playerAvatar.position.x;
   let newZ = playerAvatar.position.z;
 
+  // Get camera rotation for relative movement
+  const cameraRotation = camera.rotation.y;
+  
+  // Calculate movement vectors relative to camera rotation
+  const forwardX = Math.sin(cameraRotation);
+  const forwardZ = Math.cos(cameraRotation);
+  const rightX = Math.cos(cameraRotation);
+  const rightZ = -Math.sin(cameraRotation);
+
   if (keys['w'] || keys['arrowup']) {
-    newZ -= moveSpeed;
+    // Move forward relative to camera
+    newX += forwardX * moveSpeed;
+    newZ += forwardZ * moveSpeed;
     moved = true;
   }
   if (keys['s'] || keys['arrowdown']) {
-    newZ += moveSpeed;
+    // Move backward relative to camera
+    newX -= forwardX * moveSpeed;
+    newZ -= forwardZ * moveSpeed;
     moved = true;
   }
   if (keys['a'] || keys['arrowleft']) {
-    newX -= moveSpeed;
+    // Move left relative to camera
+    newX -= rightX * moveSpeed;
+    newZ -= rightZ * moveSpeed;
     moved = true;
   }
   if (keys['d'] || keys['arrowright']) {
-    newX += moveSpeed;
+    // Move right relative to camera
+    newX += rightX * moveSpeed;
+    newZ += rightZ * moveSpeed;
     moved = true;
   }
+  
+  // Camera rotation (Q/E keys)
   if (keys['q']) {
     camera.rotation.y += 0.05;
-    moved = true;
   }
   if (keys['e']) {
     camera.rotation.y -= 0.05;
-    moved = true;
   }
 
   if (moved) {
@@ -866,40 +883,35 @@ function createTerrain(): THREE.Mesh {
   const positions = geometry.attributes.position;
   if (!positions) return new THREE.Mesh();
   
-  // Create height map with more dramatic terrain for massive world
+  // Create much flatter terrain for better gameplay
   for (let i = 0; i < positions.count; i++) {
     const x = positions.getX(i);
     const z = positions.getY(i);
     
-    // Multiple octaves of noise for realistic terrain
+    // Very gentle terrain variations
     let height = 0;
     
-    // Large rolling hills (scaled for massive world)
-    height += Math.sin(x * 0.01) * Math.cos(z * 0.01) * 15;
-    height += Math.sin(x * 0.02) * Math.cos(z * 0.02) * 10;
+    // Very subtle rolling hills (much smaller scale)
+    height += Math.sin(x * 0.01) * Math.cos(z * 0.01) * 2; // Reduced from 15 to 2
+    height += Math.sin(x * 0.02) * Math.cos(z * 0.02) * 1.5; // Reduced from 10 to 1.5
     
-    // Medium hills
-    height += Math.sin(x * 0.05) * Math.cos(z * 0.05) * 5;
-    height += Math.sin(x * 0.1) * Math.cos(z * 0.1) * 3;
+    // Very small details
+    height += Math.sin(x * 0.05) * Math.cos(z * 0.05) * 0.5; // Reduced from 5 to 0.5
+    height += Math.sin(x * 0.1) * Math.cos(z * 0.1) * 0.3; // Reduced from 3 to 0.3
     
-    // Small details
-    height += Math.sin(x * 0.2) * Math.cos(z * 0.2) * 1;
+    // Tiny details
+    height += Math.sin(x * 0.2) * Math.cos(z * 0.2) * 0.1; // Reduced from 1 to 0.1
     
-    // Add dramatic mountain peaks at edges
+    // Very gentle mountain slopes at edges (much smaller)
     const distFromCenter = Math.sqrt(x * x + z * z);
-    if (distFromCenter > 500) {
-      const mountainHeight = (distFromCenter - 500) * 0.1;
+    if (distFromCenter > 800) { // Moved mountains further out
+      const mountainHeight = (distFromCenter - 800) * 0.02; // Much smaller slope
       height += mountainHeight;
-      
-      // Add some random peaks
-      if (Math.random() > 0.8) {
-        height += mountainHeight * 0.5;
-      }
     }
     
-    // Add some valleys
-    if (Math.abs(x) < 200 && Math.abs(z) < 200) {
-      height -= 3; // Central valley
+    // Gentle central valley
+    if (Math.abs(x) < 300 && Math.abs(z) < 300) {
+      height -= 0.5; // Very shallow valley
     }
     
     positions.setZ(i, height);
@@ -989,17 +1001,76 @@ async function fetchInitialGameState(): Promise<void> {
 function createPlayerAvatar(): void {
   if (!gameState || !scene) return;
   
-  const geometry = new THREE.CylinderGeometry(0.5, 0.5, 2, 8);
-  const material = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
-  playerAvatar = new THREE.Mesh(geometry, material);
+  // Create farmer avatar group
+  const farmerGroup = new THREE.Group();
   
+  // Farmer body (torso)
+  const bodyGeometry = new THREE.CylinderGeometry(0.4, 0.5, 1.2, 8);
+  const bodyMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 }); // Brown shirt
+  const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
+  body.position.y = 0.6;
+  farmerGroup.add(body);
+  
+  // Farmer head
+  const headGeometry = new THREE.SphereGeometry(0.3, 8, 6);
+  const headMaterial = new THREE.MeshLambertMaterial({ color: 0xFFDBB5 }); // Skin color
+  const head = new THREE.Mesh(headGeometry, headMaterial);
+  head.position.y = 1.5;
+  farmerGroup.add(head);
+  
+  // Farmer hat
+  const hatGeometry = new THREE.CylinderGeometry(0.35, 0.4, 0.3, 8);
+  const hatMaterial = new THREE.MeshLambertMaterial({ color: 0x654321 }); // Brown hat
+  const hat = new THREE.Mesh(hatGeometry, hatMaterial);
+  hat.position.y = 1.8;
+  farmerGroup.add(hat);
+  
+  // Farmer arms
+  const armGeometry = new THREE.CylinderGeometry(0.1, 0.12, 0.8, 6);
+  const armMaterial = new THREE.MeshLambertMaterial({ color: 0xFFDBB5 }); // Skin color
+  
+  // Left arm
+  const leftArm = new THREE.Mesh(armGeometry, armMaterial);
+  leftArm.position.set(-0.6, 0.8, 0);
+  leftArm.rotation.z = Math.PI / 6; // Slight angle
+  farmerGroup.add(leftArm);
+  
+  // Right arm
+  const rightArm = new THREE.Mesh(armGeometry, armMaterial);
+  rightArm.position.set(0.6, 0.8, 0);
+  rightArm.rotation.z = -Math.PI / 6; // Slight angle
+  farmerGroup.add(rightArm);
+  
+  // Farmer legs
+  const legGeometry = new THREE.CylinderGeometry(0.15, 0.18, 0.8, 6);
+  const legMaterial = new THREE.MeshLambertMaterial({ color: 0x000080 }); // Blue pants
+  
+  // Left leg
+  const leftLeg = new THREE.Mesh(legGeometry, legMaterial);
+  leftLeg.position.set(-0.2, -0.4, 0);
+  farmerGroup.add(leftLeg);
+  
+  // Right leg
+  const rightLeg = new THREE.Mesh(legGeometry, legMaterial);
+  rightLeg.position.set(0.2, -0.4, 0);
+  farmerGroup.add(rightLeg);
+  
+  // Set up the farmer avatar
+  playerAvatar = farmerGroup;
   playerAvatar.position.set(
     gameState.player.position.x,
     gameState.player.position.y + 1,
     gameState.player.position.z
   );
   
-  playerAvatar.castShadow = true;
+  // Enable shadows for all parts
+  farmerGroup.traverse((child) => {
+    if (child instanceof THREE.Mesh) {
+      child.castShadow = true;
+      child.receiveShadow = true;
+    }
+  });
+  
   scene.add(playerAvatar);
   
   // Create username label
