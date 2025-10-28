@@ -32,6 +32,21 @@ app.use(express.text());
 
 const router = express.Router();
 
+// World Configuration
+const WORLD_WIDTH = 2000; // Total world width in tiles
+const WORLD_HEIGHT = 4000; // Total world height in tiles
+const PLOT_WIDTH = 10; // Individual plot width
+const PLOT_HEIGHT = 20; // Individual plot height
+const MAX_PLAYERS = 200; // Maximum number of players who can claim plots
+const TILE_SIZE = 1; // Size of each tile in Three.js units
+
+// Calculate grid dimensions
+const GRID_WIDTH = Math.floor(WORLD_WIDTH / PLOT_WIDTH); // 200 plots wide
+const GRID_HEIGHT = Math.floor(WORLD_HEIGHT / PLOT_HEIGHT); // 200 plots tall
+const TOTAL_PLOTS = GRID_WIDTH * GRID_HEIGHT; // 40,000 total plots available
+
+console.log(`World initialized: ${WORLD_WIDTH}x${WORLD_HEIGHT} tiles, ${GRID_WIDTH}x${GRID_HEIGHT} plots, ${TOTAL_PLOTS} total plots`);
+
 // Game configuration
 const TREE_TYPES: TreeType[] = ['oak', 'pine', 'cherry', 'maple', 'cedar'];
 const GROWTH_TIME = 30000; // 30 seconds per growth stage
@@ -39,8 +54,8 @@ const MAX_TREES_PER_PLOT = 5;
 const SEED_COST = 10;
 const WATER_COST = 5;
 const LAND_PLOT_COST = 100;
-const BIOME_SIZE = 100; // 100x100 grid
-const MAX_PLAYERS_PER_BIOME = 5000;
+const BIOME_SIZE = WORLD_WIDTH; // Use world width as biome size
+const MAX_PLAYERS_PER_BIOME = MAX_PLAYERS;
 
 // Achievement definitions
 const ACHIEVEMENTS: Record<string, Achievement> = {
@@ -188,12 +203,52 @@ async function getRecentChatMessages(limit: number = 20): Promise<ChatMessage[]>
   return chatMessages.slice(-limit);
 }
 
-function getRandomPosition(): { x: number; y: number; z: number } {
-  return {
-    x: (Math.random() - 0.5) * BIOME_SIZE,
-    y: 0,
-    z: (Math.random() - 0.5) * BIOME_SIZE
-  };
+// Grid allocation system
+const claimedPlots = new Set<string>(); // Track claimed plot coordinates
+
+function findAvailablePlot(): { gridX: number; gridZ: number } | null {
+  // Try to find an available 10x20 plot
+  for (let gridX = 0; gridX < GRID_WIDTH; gridX++) {
+    for (let gridZ = 0; gridZ < GRID_HEIGHT; gridZ++) {
+      const plotKey = `${gridX},${gridZ}`;
+      if (!claimedPlots.has(plotKey)) {
+        return { gridX, gridZ };
+      }
+    }
+  }
+  return null; // No available plots
+}
+
+function claimPlot(gridX: number, gridZ: number): boolean {
+  const plotKey = `${gridX},${gridZ}`;
+  if (claimedPlots.has(plotKey)) {
+    return false; // Already claimed
+  }
+  
+  if (claimedPlots.size >= MAX_PLAYERS) {
+    return false; // World is full
+  }
+  
+  claimedPlots.add(plotKey);
+  return true;
+}
+
+function getPlotWorldCoordinates(gridX: number, gridZ: number): { 
+  startX: number; 
+  startZ: number; 
+  endX: number; 
+  endZ: number; 
+  centerX: number; 
+  centerZ: number; 
+} {
+  const startX = gridX * PLOT_WIDTH - WORLD_WIDTH / 2;
+  const startZ = gridZ * PLOT_HEIGHT - WORLD_HEIGHT / 2;
+  const endX = startX + PLOT_WIDTH;
+  const endZ = startZ + PLOT_HEIGHT;
+  const centerX = startX + PLOT_WIDTH / 2;
+  const centerZ = startZ + PLOT_HEIGHT / 2;
+  
+  return { startX, startZ, endX, endZ, centerX, centerZ };
 }
 
 function calculateTreeGrowth(tree: Tree): number {
@@ -242,13 +297,17 @@ function getDefaultPlayer(username: string): Player {
 
 function getDefaultBiome(): Biome {
   return {
-    id: 'forest_biome_1',
-    name: 'Ancient Forest',
+    id: 'massive_world',
+    name: 'The Eternal Forest',
     type: 'forest',
-    maxPlayers: MAX_PLAYERS_PER_BIOME,
-    landPlots: [],
+    maxPlayers: MAX_PLAYERS,
+    landPlots: [], // Will be populated as players claim plots
     players: [],
-    environment: BIOME_CONFIGS.forest
+    environment: {
+      skyColor: '#87CEEB',
+      groundColor: '#90EE90',
+      fogColor: '#87CEEB'
+    }
   };
 }
 
@@ -268,31 +327,25 @@ function getDefaultGameState(player: Player, biome: Biome): GameState {
 }
 
 async function allocateStartingLand(player: Player, biome: Biome): Promise<void> {
-  // Find an empty spot for starting land
-  let attempts = 0;
-  let x = 0, z = 0;
+  const availablePlot = findAvailablePlot();
   
-  while (attempts < 100) {
-    x = Math.floor((Math.random() - 0.5) * 40) * 10; // Grid-aligned positions
-    z = Math.floor((Math.random() - 0.5) * 40) * 10;
-    
-    // Check if this spot is available
-    const existingPlot = biome.landPlots.find(plot => 
-      Math.abs(plot.x - x) < 10 && Math.abs(plot.z - z) < 10
-    );
-    
-    if (!existingPlot) {
-      break;
-    }
-    
-    attempts++;
+  if (!availablePlot) {
+    throw new Error('No available plots in the world');
   }
   
-  // Create starting land plot
-  const startingLandPlot: LandPlot = {
-    id: `land_${player.id}_start`,
-    x,
-    z,
+  const { gridX, gridZ } = availablePlot;
+  const { startX, startZ, endX, endZ, centerX, centerZ } = getPlotWorldCoordinates(gridX, gridZ);
+  
+  // Claim the plot
+  if (!claimPlot(gridX, gridZ)) {
+    throw new Error('Failed to claim plot');
+  }
+  
+  // Create land plot
+  const landPlot: LandPlot = {
+    id: generateLandPlotId(),
+    x: centerX,
+    z: centerZ,
     ownerId: player.id,
     biomeType: biome.type,
     trees: [],
@@ -300,11 +353,14 @@ async function allocateStartingLand(player: Player, biome: Biome): Promise<void>
     price: 0 // Free starting land
   };
   
-  biome.landPlots.push(startingLandPlot);
-  player.landPlots.push(startingLandPlot.id);
+  // Add to biome and player
+  biome.landPlots.push(landPlot);
+  player.landPlots.push(landPlot.id);
   
-  // Set player position to their starting land
-  player.position = { x, y: 0, z };
+  // Set player starting position to center of their plot
+  player.position = { x: centerX, y: 0, z: centerZ };
+  
+  console.log(`Allocated plot (${gridX},${gridZ}) to player ${player.username} at (${centerX}, ${centerZ})`);
 }
 
 async function getPlayer(playerId: string): Promise<Player | null> {
@@ -383,28 +439,23 @@ router.get<{ postId: string }, InitResponse | { status: string; message: string 
   async (_req, res): Promise<void> => {
     const { postId } = context;
 
+    // Allow development mode without postId
     if (!postId) {
-      console.error('API Init Error: postId not found in devvit context');
-      res.status(400).json({
-        status: 'error',
-        message: 'postId is required but missing from context',
-      });
-      return;
+      console.log('Development mode: No postId found, using default');
     }
 
     try {
-      const username = await reddit.getCurrentUsername();
+      let username = await reddit.getCurrentUsername();
+      
+      // Fallback for development mode when no Reddit context
       if (!username) {
-        res.status(400).json({
-          status: 'error',
-          message: 'Could not get username',
-        });
-        return;
+        console.log('No Reddit username found, using development mode');
+        username = 'dev_player';
       }
 
       // Try to get existing player
       let player = await getPlayer(username);
-      let biome = await getBiome('forest_biome_1');
+      let biome = await getBiome('massive_world');
       
       if (!biome) {
         biome = getDefaultBiome();
@@ -441,7 +492,7 @@ router.get<{ postId: string }, InitResponse | { status: string; message: string 
 
       res.json({
         type: 'init',
-        postId: postId,
+        postId: postId || 'dev_post',
         gameState,
         username,
         nearbyPlayers,
@@ -895,9 +946,9 @@ router.post<{ postId: string }, HarvestTreeResponse | { status: string; message:
       await saveGameState(gameState);
       await savePlayer(gameState.player);
 
-      res.json({
+    res.json({
         type: 'harvest_tree',
-        postId,
+      postId,
         gameState,
         rewards: { coins, seeds, experience },
         achievements: newAchievements
@@ -956,9 +1007,9 @@ router.post<{ postId: string }, BuySeedsResponse | { status: string; message: st
       await saveGameState(gameState);
       await savePlayer(gameState.player);
 
-      res.json({
+    res.json({
         type: 'buy_seeds',
-        postId,
+      postId,
         gameState,
         success: true,
         message: `Bought ${quantity} ${treeType} seeds!`
@@ -1067,6 +1118,249 @@ router.post('/internal/menu/post-create', async (_req, res): Promise<void> => {
       status: 'error',
       message: 'Failed to create post',
     });
+  }
+});
+
+// Devvit Custom Post Type Configuration
+// Note: Custom post types are handled by Devvit framework automatically
+
+// Add custom post type for 3D world
+// app.addCustomPostType({
+//   name: '3D Forest World',
+//   description: 'Enter the magical 3D forest world',
+//   render: async (context) => {
+//     const { reddit } = context;
+//     
+//     // Get user info after authentication
+//     const user = await reddit.getCurrentUser();
+//     
+//     return {
+//       type: 'custom',
+//       body: `
+//         <div style="width: 100%; height: 100vh; position: relative;">
+//           <iframe 
+//             id="3d-world-frame"
+//             src="/3d-world?user=${user.username}&auth=${context.authToken}"
+//             style="width: 100%; height: 100%; border: none;"
+//             allow="fullscreen; webgl; gamepad"
+//             sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation"
+//           ></iframe>
+//           
+//           <!-- Loading overlay -->
+//           <div id="loading-overlay" style="
+//             position: absolute;
+//             top: 0;
+//             left: 0;
+//             width: 100%;
+//             height: 100%;
+//             background: linear-gradient(135deg, #1e3c72, #2a5298);
+//             display: flex;
+//             flex-direction: column;
+//             justify-content: center;
+//             align-items: center;
+//             color: white;
+//             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+//             z-index: 1000;
+//           ">
+//             <div style="text-align: center;">
+//               <h1 style="font-size: 2.5rem; margin-bottom: 1rem; color: #90EE90;">
+//                 🌳 Taming Trees 🌳
+//               </h1>
+//               <p style="font-size: 1.2rem; margin-bottom: 2rem; opacity: 0.9;">
+//                 Welcome to the magical forest, ${user.username}!
+//               </p>
+//               <div style="
+//                 width: 50px;
+//                 height: 50px;
+//                 border: 3px solid rgba(144, 238, 144, 0.3);
+//                 border-top: 3px solid #90EE90;
+//                 border-radius: 50%;
+//                 animation: spin 1s linear infinite;
+//                 margin: 0 auto;
+//               "></div>
+//               <p style="margin-top: 1rem; opacity: 0.7;">
+//                 Loading your forest...
+//               </p>
+//             </div>
+//           </div>
+//           
+//           <style>
+//             @keyframes spin {
+//               0% { transform: rotate(0deg); }
+//               100% { transform: rotate(360deg); }
+//             }
+//           </style>
+//           
+//           <script>
+//             // Hide loading overlay when iframe loads
+//             document.getElementById('3d-world-frame').onload = function() {
+//               setTimeout(() => {
+//                 document.getElementById('loading-overlay').style.display = 'none';
+//               }, 2000);
+//             };
+//             
+//             // Handle iframe communication
+//             window.addEventListener('message', function(event) {
+//               if (event.origin !== window.location.origin) return;
+//               
+//               if (event.data.type === 'game-ready') {
+//                 document.getElementById('loading-overlay').style.display = 'none';
+//               }
+//             });
+//           </script>
+//         </div>
+//       `
+//     };
+//   },
+// });
+
+// Serve 3D world iframe
+router.get('/3d-world', async (req, res): Promise<void> => {
+  try {
+    const { user, auth } = req.query;
+    
+    if (!user || !auth) {
+      res.status(400).send('Missing user or auth parameters');
+      return;
+    }
+    
+    // Serve the 3D world HTML with authentication
+    res.send(`
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Taming Trees - 3D World</title>
+        <style>
+          body {
+            margin: 0;
+            padding: 0;
+            color: rgba(255, 255, 255, 0.87);
+            background-color: #0f0f0f;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+          }
+          
+          #app {
+            width: 100%;
+            height: 100vh;
+            overflow: hidden;
+          }
+          
+          #game-container {
+            width: 100%;
+            height: 100%;
+            position: relative;
+          }
+          
+          #loading-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #1e3c72, #2a5298);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            z-index: 1000;
+          }
+          
+          .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid rgba(144, 238, 144, 0.3);
+            border-top: 3px solid #90EE90;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 1rem;
+          }
+          
+          @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+          }
+          
+          .loading-text {
+            font-size: 1.2rem;
+            opacity: 0.9;
+            text-align: center;
+          }
+          
+          .welcome-text {
+            font-size: 2rem;
+            color: #90EE90;
+            margin-bottom: 1rem;
+            text-align: center;
+          }
+        </style>
+      </head>
+      <body>
+        <div id="app">
+          <div id="game-container">
+            <div id="loading-screen">
+              <div class="welcome-text">🌳 Welcome to Taming Trees! 🌳</div>
+              <div class="loading-spinner"></div>
+              <div class="loading-text">Loading your forest, ${user}...</div>
+            </div>
+          </div>
+        </div>
+        
+        <script>
+          // Authentication data
+          window.gameAuth = {
+            username: '${user}',
+            authToken: '${auth}',
+            timestamp: Date.now()
+          };
+          
+          // Notify parent when ready
+          function notifyParent() {
+            if (window.parent && window.parent !== window) {
+              window.parent.postMessage({
+                type: 'game-ready',
+                username: '${user}'
+              }, '*');
+            }
+          }
+          
+          // Load the 3D world
+          async function loadGame() {
+            try {
+              // Import the main game module
+              const { default: initGame } = await import('./main.js');
+              
+              // Initialize the game with authentication
+              await initGame(window.gameAuth);
+              
+              // Hide loading screen
+              document.getElementById('loading-screen').style.display = 'none';
+              
+              // Notify parent
+              notifyParent();
+              
+            } catch (error) {
+              console.error('Failed to load game:', error);
+              document.getElementById('loading-screen').innerHTML = 
+                '<div class="welcome-text">❌ Error Loading Game</div>' +
+                '<div class="loading-text">Please refresh the page</div>';
+            }
+          }
+          
+          // Start loading
+          loadGame();
+        </script>
+        
+        <script type="module" src="./main.js"></script>
+      </body>
+      </html>
+    `);
+  } catch (error) {
+    console.error('Error serving 3D world:', error);
+    res.status(500).send('Error loading 3D world');
   }
 });
 

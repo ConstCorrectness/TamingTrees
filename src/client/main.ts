@@ -1,88 +1,838 @@
+// Import Three.js and types
 import * as THREE from 'three';
-import { navigateTo } from '@devvit/client';
-import {
-  InitResponse,
-  PlantTreeResponse,
-  WaterTreeResponse,
-  HarvestTreeResponse,
-  BuySeedsResponse,
-  BuyLandResponse,
-  MovePlayerResponse,
-  GameState,
-  Tree,
-  TreeType,
-  Player,
-  ChatMessage
+import type { 
+  GameState, 
+  InitResponse, 
+  PlantTreeResponse, 
+  WaterTreeResponse, 
+  HarvestTreeResponse, 
+  BuySeedsResponse, 
+  BuyLandResponse, 
+  MovePlayerResponse, 
+  ChatMessage,
+  Player
 } from '../shared/types/api';
 
-// UI Elements
-const titleElement = document.getElementById('title') as HTMLHeadingElement;
-const resourcesElement = document.getElementById('resources') as HTMLDivElement;
-const treesElement = document.getElementById('trees') as HTMLDivElement;
-const shopElement = document.getElementById('shop') as HTMLDivElement;
-const achievementsElement = document.getElementById('achievements') as HTMLDivElement;
-const minimapCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
+// Game initialization and authentication
+interface GameAuth {
+  username: string;
+  authToken: string;
+}
 
-// Links
-const docsLink = document.getElementById('docs-link');
-const playtestLink = document.getElementById('playtest-link');
-const discordLink = document.getElementById('discord-link');
+let gameAuth: GameAuth | null = null;
 
-docsLink?.addEventListener('click', () => navigateTo('https://developers.reddit.com/docs'));
-playtestLink?.addEventListener('click', () => navigateTo('https://www.reddit.com/r/Devvit'));
-discordLink?.addEventListener('click', () => navigateTo('https://discord.com/invite/R7yu2wh9Qz'));
-
-// Game State
-let currentPostId: string | null = null;
+// Global variables
+let scene: THREE.Scene;
+let camera: THREE.PerspectiveCamera;
+let renderer: THREE.WebGLRenderer;
+let playerAvatar: THREE.Mesh;
 let gameState: GameState | null = null;
-let treeMeshes: Map<string, THREE.Mesh> = new Map();
-let playerMeshes: Map<string, THREE.Mesh> = new Map();
-let landPlotMeshes: Map<string, THREE.Mesh> = new Map();
-let playerAvatar: THREE.Mesh | null = null;
-
-// UI State
-let uiHidden = false;
-
-// Movement controls
-const keys: Record<string, boolean> = {};
+let nearbyPlayers: Player[] = [];
+let treeMeshes: THREE.Mesh[] = [];
+let playerMeshes: THREE.Mesh[] = [];
+let usernameLabels: Map<string, THREE.Sprite> = new Map();
+let chatMessages: ChatMessage[] = [];
+let chatUpdateInterval: NodeJS.Timeout | null = null;
 let movementThrottle = 0;
+let keys: Record<string, boolean> = {};
 
-// Three.js Setup
-const canvas = document.getElementById('bg') as HTMLCanvasElement;
-const scene = new THREE.Scene();
+// UI Elements
+let minimapCanvas: HTMLCanvasElement;
 
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-camera.position.set(0, 25, 35);
-camera.lookAt(0, 0, 0);
+// Initialize game with authentication
+async function initGame(auth: GameAuth): Promise<void> {
+  console.log('Initializing game with auth:', auth);
+  gameAuth = auth;
+  
+  // Create UI first
+  createUI();
+  
+  // Initialize Three.js
+  initThreeJS();
+  
+  // Start the game
+  await fetchInitialGameState();
+  animate();
+}
 
-const renderer = new THREE.WebGLRenderer({ antialias: true, canvas });
-renderer.setPixelRatio(window.devicePixelRatio ?? 1);
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// Function declarations (moved to top to avoid hoisting issues)
+function handleMovement(): void {
+  if (!playerAvatar || !gameState) return;
 
-// Lighting
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-scene.add(ambientLight);
+  const moveSpeed = 0.5; // Slower movement for massive world
+  let moved = false;
+  let newX = playerAvatar.position.x;
+  let newZ = playerAvatar.position.z;
 
-const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-directionalLight.position.set(10, 20, 10);
-directionalLight.castShadow = true;
-directionalLight.shadow.mapSize.width = 2048;
-directionalLight.shadow.mapSize.height = 2048;
-scene.add(directionalLight);
+  if (keys['w'] || keys['arrowup']) {
+    newZ -= moveSpeed;
+    moved = true;
+  }
+  if (keys['s'] || keys['arrowdown']) {
+    newZ += moveSpeed;
+    moved = true;
+  }
+  if (keys['a'] || keys['arrowleft']) {
+    newX -= moveSpeed;
+    moved = true;
+  }
+  if (keys['d'] || keys['arrowright']) {
+    newX += moveSpeed;
+    moved = true;
+  }
+  if (keys['q']) {
+    camera.rotation.y += 0.05;
+    moved = true;
+  }
+  if (keys['e']) {
+    camera.rotation.y -= 0.05;
+    moved = true;
+  }
 
-// Terrain with mountains
+  if (moved) {
+    // Keep player within massive world bounds
+    const worldBounds = 1000; // Half of world size (2000/2)
+    newX = Math.max(-worldBounds, Math.min(worldBounds, newX));
+    newZ = Math.max(-worldBounds, Math.min(worldBounds, newZ));
+    
+    // Update player position immediately for smooth movement
+    playerAvatar.position.set(newX, 2, newZ);
+    
+    // Update camera to follow player with better angle for massive world
+    camera.position.set(newX, 50, newZ + 100);
+    camera.lookAt(newX, 0, newZ);
+    
+    // Throttle server updates to avoid spam
+    movementThrottle++;
+    if (movementThrottle >= 10) { // Update server every 10 frames
+      movementThrottle = 0;
+      movePlayer(newX, 0, newZ);
+    }
+  }
+}
+
+function renderMinimap(): void {
+  if (!minimapCanvas || !gameState) return;
+  
+  const ctx = minimapCanvas.getContext('2d');
+  if (!ctx) return;
+  
+  // Set background
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.9)';
+  ctx.fillRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+
+  const canvasSize = 150; // Canvas size
+  const gridSize = 20; // Size of each grid cell (20x20 tiles)
+  const cellsPerSide = 2; // Show 2x2 grid
+  const totalGridSize = gridSize * cellsPerSide; // 40x40 tiles
+  
+  // Get player position
+  const playerX = playerAvatar?.position.x || 0;
+  const playerZ = playerAvatar?.position.z || 0;
+  
+  // Calculate grid boundaries around player
+  const gridStartX = Math.floor(playerX / gridSize) * gridSize;
+  const gridStartZ = Math.floor(playerZ / gridSize) * gridSize;
+  const gridEndX = gridStartX + totalGridSize;
+  const gridEndZ = gridStartZ + totalGridSize;
+  
+  // Scale factor for rendering
+  const scale = canvasSize / totalGridSize;
+  
+  // Draw roads (main paths)
+  ctx.strokeStyle = 'rgba(139, 69, 19, 0.8)'; // Brown roads
+  ctx.lineWidth = 2;
+  
+  // Horizontal roads every 40 tiles
+  for (let x = gridStartX; x <= gridEndX; x += 40) {
+    if (x >= gridStartX && x <= gridEndX) {
+      const roadX = (x - gridStartX) * scale;
+      ctx.beginPath();
+      ctx.moveTo(roadX, 0);
+      ctx.lineTo(roadX, canvasSize);
+      ctx.stroke();
+    }
+  }
+  
+  // Vertical roads every 40 tiles
+  for (let z = gridStartZ; z <= gridEndZ; z += 40) {
+    if (z >= gridStartZ && z <= gridEndZ) {
+      const roadZ = (z - gridStartZ) * scale;
+      ctx.beginPath();
+      ctx.moveTo(0, roadZ);
+      ctx.lineTo(canvasSize, roadZ);
+      ctx.stroke();
+    }
+  }
+  
+  // Draw grid lines
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
+  ctx.lineWidth = 1;
+  
+  // Vertical grid lines
+  for (let i = 0; i <= cellsPerSide; i++) {
+    const x = i * gridSize * scale;
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, canvasSize);
+    ctx.stroke();
+  }
+  
+  // Horizontal grid lines
+  for (let i = 0; i <= cellsPerSide; i++) {
+    const y = i * gridSize * scale;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(canvasSize, y);
+    ctx.stroke();
+  }
+  
+  // Draw land plots in this area
+  gameState.currentBiome.landPlots.forEach((plot: any) => {
+    if (plot.x >= gridStartX && plot.x < gridEndX && 
+        plot.z >= gridStartZ && plot.z < gridEndZ) {
+      const x = (plot.x - gridStartX) * scale;
+      const y = (plot.z - gridStartZ) * scale;
+      const size = 10 * scale; // Plot size scaled down
+
+      ctx.fillStyle = plot.ownerId === gameState!.player.id ? '#90EE90' : '#FFB6C1';
+      ctx.fillRect(x - size/2, y - size/2, size, size);
+      
+      // Draw border
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x - size/2, y - size/2, size, size);
+    }
+  });
+
+  // Draw trees with enhanced color coding
+  gameState.trees.forEach((tree: any) => {
+    if (tree.x >= gridStartX && tree.x < gridEndX && 
+        tree.z >= gridStartZ && tree.z < gridEndZ) {
+      const x = (tree.x - gridStartX) * scale;
+      const y = (tree.z - gridStartZ) * scale;
+
+      // Enhanced tree colors with different sizes
+      let treeColor = '#8B4513'; // Default brown
+      let treeSize = 2;
+      
+      switch (tree.type) {
+        case 'oak':
+          treeColor = '#8B4513'; // Dark brown trunk
+          treeSize = 3;
+          break;
+        case 'pine':
+          treeColor = '#228B22'; // Forest green
+          treeSize = 2.5;
+          break;
+        case 'cherry':
+          treeColor = '#FF69B4'; // Hot pink
+          treeSize = 2.5;
+          break;
+        case 'maple':
+          treeColor = '#FF4500'; // Orange red
+          treeSize = 3;
+          break;
+        case 'birch':
+          treeColor = '#F5F5DC'; // Beige
+          treeSize = 2;
+          break;
+        case 'willow':
+          treeColor = '#9ACD32'; // Yellow green
+          treeSize = 2.5;
+          break;
+        case 'cedar':
+          treeColor = '#2F4F4F'; // Dark slate gray
+          treeSize = 3;
+          break;
+        case 'apple':
+          treeColor = '#32CD32'; // Lime green
+          treeSize = 2.5;
+          break;
+        default:
+          treeColor = '#FFD700'; // Gold for unknown types
+          treeSize = 2;
+      }
+      
+      // Draw tree with glow effect
+      ctx.shadowColor = treeColor;
+      ctx.shadowBlur = 3;
+      ctx.fillStyle = treeColor;
+      ctx.beginPath();
+      ctx.arc(x, y, treeSize, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0; // Reset shadow
+    }
+  });
+
+  // Draw player with enhanced indicator
+  if (playerAvatar) {
+    const x = (playerAvatar.position.x - gridStartX) * scale;
+    const y = (playerAvatar.position.z - gridStartZ) * scale;
+    
+    // Player body
+    ctx.fillStyle = '#FF0000';
+    ctx.shadowColor = '#FF0000';
+    ctx.shadowBlur = 5;
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fill();
+    
+    // Player direction indicator with arrow
+    ctx.strokeStyle = '#FF0000';
+    ctx.lineWidth = 3;
+    ctx.shadowBlur = 3;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    const arrowLength = 8;
+    const arrowX = x + Math.cos(camera?.rotation.y || 0) * arrowLength;
+    const arrowY = y + Math.sin(camera?.rotation.y || 0) * arrowLength;
+    ctx.lineTo(arrowX, arrowY);
+    
+    // Draw arrowhead
+    const arrowAngle = Math.PI / 6; // 30 degrees
+    const arrowSize = 4;
+    ctx.moveTo(arrowX, arrowY);
+    ctx.lineTo(
+      arrowX - Math.cos((camera?.rotation.y || 0) - arrowAngle) * arrowSize,
+      arrowY - Math.sin((camera?.rotation.y || 0) - arrowAngle) * arrowSize
+    );
+    ctx.moveTo(arrowX, arrowY);
+    ctx.lineTo(
+      arrowX - Math.cos((camera?.rotation.y || 0) + arrowAngle) * arrowSize,
+      arrowY - Math.sin((camera?.rotation.y || 0) + arrowAngle) * arrowSize
+    );
+    ctx.stroke();
+    ctx.shadowBlur = 0; // Reset shadow
+  }
+  
+  // Draw coordinates with better styling
+  ctx.fillStyle = 'white';
+  ctx.font = 'bold 10px Arial';
+  ctx.textAlign = 'left';
+  ctx.shadowColor = 'black';
+  ctx.shadowBlur = 2;
+  
+  // Top-left corner coordinates
+  ctx.fillText(`(${gridStartX}, ${gridStartZ})`, 2, 12);
+  
+  // Bottom-right corner coordinates
+  ctx.textAlign = 'right';
+  ctx.fillText(`(${gridEndX}, ${gridEndZ})`, canvasSize - 2, canvasSize - 2);
+  
+  // Player coordinates
+  ctx.textAlign = 'center';
+  ctx.fillText(`You: (${Math.floor(playerX)}, ${Math.floor(playerZ)})`, canvasSize / 2, canvasSize - 2);
+  
+  // Reset shadow
+  ctx.shadowBlur = 0;
+}
+
+// Function to manually trigger resize (useful for UI changes)
+function triggerResize(): void {
+  if (renderer && camera) {
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+    
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    
+    renderer.setSize(width, height);
+    renderer.setPixelRatio(window.devicePixelRatio);
+  }
+}
+
+function toggleUI(): void {
+  console.log('Toggle UI called');
+  const toggleableElements = document.querySelectorAll('.ui-toggleable');
+  console.log('Found toggleable elements:', toggleableElements.length);
+  const isHidden = toggleableElements[0]?.classList.contains('hidden');
+  console.log('Is hidden:', isHidden);
+  
+  toggleableElements.forEach(element => {
+    if (isHidden) {
+      element.classList.remove('hidden');
+      console.log('Showing element:', element);
+    } else {
+      element.classList.add('hidden');
+      console.log('Hiding element:', element);
+    }
+  });
+  
+  // Trigger resize after UI toggle to ensure proper canvas sizing
+  setTimeout(() => triggerResize(), 100);
+}
+
+function showMessage(message: string, type: 'success' | 'error' | 'info' = 'info'): void {
+  const messageElement = document.getElementById('message-display');
+  if (!messageElement) return;
+  
+  messageElement.textContent = message;
+  messageElement.className = `message ${type}`;
+  messageElement.style.display = 'block';
+  
+  setTimeout(() => {
+    messageElement.style.display = 'none';
+  }, 3000);
+}
+
+// Export the init function as default
+export default initGame;
+
+// Animation loop
+function animate(): void {
+  requestAnimationFrame(animate);
+  
+  // Handle movement
+  handleMovement();
+  
+  // Render minimap (throttled)
+  if (movementThrottle % 10 === 0) {
+    renderMinimap();
+  }
+  movementThrottle++;
+  
+  // Render the scene
+  if (renderer && scene && camera) {
+    renderer.render(scene, camera);
+  }
+}
+
+// Create UI elements dynamically
+function createUI(): void {
+  const gameContainer = document.getElementById('game-container');
+  if (!gameContainer) return;
+
+  // Create canvas
+  const canvas = document.createElement('canvas');
+  canvas.id = 'game-canvas';
+  canvas.style.width = '100%';
+  canvas.style.height = '100%';
+  canvas.style.display = 'block';
+  gameContainer.appendChild(canvas);
+
+  // Create overlay
+  const overlay = document.createElement('div');
+  overlay.className = 'overlay';
+  overlay.innerHTML = `
+    <div class="title">🌳 Taming Trees 🌳</div>
+    
+    <button class="ui-toggle-btn" onclick="toggleUI()">⚙️</button>
+    
+    <div class="resources ui-toggleable">
+      <div class="resource-item">
+        <span class="resource-icon">💰</span>
+        <span id="coins">0</span>
+      </div>
+      <div class="resource-item">
+        <span class="resource-icon">🌱</span>
+        <span id="seeds">0</span>
+      </div>
+      <div class="resource-item">
+        <span class="resource-icon">💧</span>
+        <span id="water">0</span>
+      </div>
+    </div>
+    
+    <div class="trees-info ui-toggleable">
+      <div class="info-item">
+        <span class="info-icon">🌳</span>
+        <span id="tree-count">0</span>
+      </div>
+      <div class="info-item">
+        <span class="info-icon">⭐</span>
+        <span id="level">1</span>
+      </div>
+    </div>
+    
+    <div id="message-display" class="message" style="display: none;"></div>
+    
+    <div class="shop ui-toggleable">
+      <h3>Shop</h3>
+      <button onclick="buySeeds()">Buy Seeds (10 coins)</button>
+      <button onclick="buyWater()">Buy Water (5 coins)</button>
+      <button onclick="buyLand()">Buy Land (100 coins)</button>
+    </div>
+    
+    <div class="achievements ui-toggleable">
+      <h3>Achievements</h3>
+      <div id="achievements-list"></div>
+    </div>
+    
+    <div class="minimap-hud">
+      <div class="minimap-title">Map</div>
+      <div class="minimap-content">
+        <canvas id="minimap-canvas" width="150" height="150"></canvas>
+      </div>
+    </div>
+    
+    <!-- Mobile Joystick Controls -->
+    <div class="mobile-controls">
+      <div class="joystick-container">
+        <div class="joystick-movement" id="movement-joystick">
+          <div class="joystick-knob" id="movement-knob"></div>
+        </div>
+        <div class="joystick-label">Move</div>
+      </div>
+      
+      <div class="joystick-container">
+        <div class="joystick-camera" id="camera-joystick">
+          <div class="joystick-knob" id="camera-knob"></div>
+        </div>
+        <div class="joystick-label">Look</div>
+      </div>
+    </div>
+    
+    <div class="chat-system ui-toggleable">
+      <div class="chat-header">
+        <span>Chat</span>
+        <span class="online-count" id="online-count">0 online</span>
+      </div>
+      <div class="chat-messages" id="chat-messages"></div>
+      <div class="chat-input-container">
+        <input type="text" id="chat-input" placeholder="Type a message..." maxlength="200">
+        <button id="chat-send" onclick="sendChatMessage()">Send</button>
+      </div>
+    </div>
+    
+    <div class="instructions ui-toggleable">
+      <h3>How to Play</h3>
+      <ul>
+        <li>Use WASD or Arrow Keys to move around</li>
+        <li>Use Q and E to rotate camera (keyboard)</li>
+        <li>Drag mouse to rotate camera (desktop)</li>
+        <li>Use joysticks for movement and camera (mobile)</li>
+        <li>Click on trees to water or harvest them</li>
+        <li>Plant new trees on your land</li>
+        <li>Buy more land to expand your forest</li>
+        <li>Press Tab to toggle UI</li>
+        <li>Press F for fullscreen</li>
+        <li>Chat with other players!</li>
+      </ul>
+    </div>
+  `;
+  
+  gameContainer.appendChild(overlay);
+  
+  // Get references to UI elements
+  minimapCanvas = document.getElementById('minimap-canvas') as HTMLCanvasElement;
+  
+  // Set up keyboard event listeners
+  document.addEventListener('keydown', (e) => {
+    keys[e.key.toLowerCase()] = true;
+    
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      toggleUI();
+    }
+    
+    if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      toggleFullscreen();
+    }
+    
+    if (e.key === 'Enter' && document.activeElement?.id === 'chat-input') {
+      e.preventDefault();
+      sendChatMessage();
+    }
+  });
+  
+  document.addEventListener('keyup', (e) => {
+    keys[e.key.toLowerCase()] = false;
+  });
+  
+  // Mobile touch controls
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let touchStartTime = 0;
+  let isTouching = false;
+  
+  document.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    const touch = e.touches[0];
+    touchStartX = touch.clientX;
+    touchStartY = touch.clientY;
+    touchStartTime = Date.now();
+    isTouching = true;
+  });
+  
+  document.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    if (!isTouching) return;
+    
+    const touch = e.touches[0];
+    const deltaX = touch.clientX - touchStartX;
+    const deltaY = touch.clientY - touchStartY;
+    const deltaTime = Date.now() - touchStartTime;
+    
+    // Only process if touch has moved significantly
+    if (deltaTime > 50 && (Math.abs(deltaX) > 10 || Math.abs(deltaY) > 10)) {
+      // Determine movement direction based on touch direction
+      if (Math.abs(deltaX) > Math.abs(deltaY)) {
+        // Horizontal movement
+        if (deltaX > 0) {
+          keys['d'] = true;
+          keys['a'] = false;
+        } else {
+          keys['a'] = true;
+          keys['d'] = false;
+        }
+        keys['w'] = false;
+        keys['s'] = false;
+      } else {
+        // Vertical movement
+        if (deltaY > 0) {
+          keys['s'] = true;
+          keys['w'] = false;
+        } else {
+          keys['w'] = true;
+          keys['s'] = false;
+        }
+        keys['a'] = false;
+        keys['d'] = false;
+      }
+      
+      // Update touch start position for continuous movement
+      touchStartX = touch.clientX;
+      touchStartY = touch.clientY;
+      touchStartTime = Date.now();
+    }
+  });
+  
+  document.addEventListener('touchend', (e) => {
+    e.preventDefault();
+    isTouching = false;
+    // Clear all movement keys
+    keys['w'] = false;
+    keys['a'] = false;
+    keys['s'] = false;
+    keys['d'] = false;
+  });
+  
+  // Mobile joystick controls
+  let movementJoystickActive = false;
+  let cameraJoystickActive = false;
+  let movementJoystickCenter = { x: 0, y: 0 };
+  let cameraJoystickCenter = { x: 0, y: 0 };
+  
+  // Movement joystick
+  const movementJoystick = document.getElementById('movement-joystick');
+  const movementKnob = document.getElementById('movement-knob');
+  
+  if (movementJoystick && movementKnob) {
+    movementJoystick.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      movementJoystickActive = true;
+      const rect = movementJoystick.getBoundingClientRect();
+      movementJoystickCenter = {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2
+      };
+    });
+    
+    movementJoystick.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      if (!movementJoystickActive) return;
+      
+      const touch = e.touches[0];
+      const deltaX = touch.clientX - movementJoystickCenter.x;
+      const deltaY = touch.clientY - movementJoystickCenter.y;
+      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+      const maxDistance = 25; // Half of joystick radius
+      
+      // Limit knob movement
+      const clampedDistance = Math.min(distance, maxDistance);
+      const angle = Math.atan2(deltaY, deltaX);
+      
+      const knobX = Math.cos(angle) * clampedDistance;
+      const knobY = Math.sin(angle) * clampedDistance;
+      
+      movementKnob.style.transform = `translate(${knobX}px, ${knobY}px)`;
+      
+      // Convert joystick input to movement
+      const normalizedX = knobX / maxDistance;
+      const normalizedY = knobY / maxDistance;
+      
+      // Update movement keys
+      keys['w'] = normalizedY < -0.3;
+      keys['s'] = normalizedY > 0.3;
+      keys['a'] = normalizedX < -0.3;
+      keys['d'] = normalizedX > 0.3;
+    });
+    
+    movementJoystick.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      movementJoystickActive = false;
+      movementKnob.style.transform = 'translate(0px, 0px)';
+      keys['w'] = false;
+      keys['s'] = false;
+      keys['a'] = false;
+      keys['d'] = false;
+    });
+  }
+  
+  // Camera joystick
+  const cameraJoystick = document.getElementById('camera-joystick');
+  const cameraKnob = document.getElementById('camera-knob');
+  
+  if (cameraJoystick && cameraKnob) {
+    cameraJoystick.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      cameraJoystickActive = true;
+      const rect = cameraJoystick.getBoundingClientRect();
+      cameraJoystickCenter = {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2
+      };
+    });
+    
+    cameraJoystick.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      if (!cameraJoystickActive) return;
+      
+      const touch = e.touches[0];
+      const deltaX = touch.clientX - cameraJoystickCenter.x;
+      const deltaY = touch.clientY - cameraJoystickCenter.y;
+      const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+      const maxDistance = 25; // Half of joystick radius
+      
+      // Limit knob movement
+      const clampedDistance = Math.min(distance, maxDistance);
+      const angle = Math.atan2(deltaY, deltaX);
+      
+      const knobX = Math.cos(angle) * clampedDistance;
+      const knobY = Math.sin(angle) * clampedDistance;
+      
+      cameraKnob.style.transform = `translate(${knobX}px, ${knobY}px)`;
+      
+      // Convert joystick input to camera rotation
+      const normalizedX = knobX / maxDistance;
+      const normalizedY = knobY / maxDistance;
+      
+      // Update camera rotation
+      if (camera) {
+        camera.rotation.y -= normalizedX * 0.02;
+        camera.rotation.x -= normalizedY * 0.02;
+        
+        // Limit vertical rotation
+        camera.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, camera.rotation.x));
+      }
+    });
+    
+    cameraJoystick.addEventListener('touchend', (e) => {
+      e.preventDefault();
+      cameraJoystickActive = false;
+      cameraKnob.style.transform = 'translate(0px, 0px)';
+    });
+  }
+}
+
+// Initialize Three.js
+function initThreeJS(): void {
+  const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
+  if (!canvas) {
+    console.error('Canvas not found');
+    return;
+  }
+  
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  camera.position.set(0, 50, 100); // Higher camera for massive world
+  camera.lookAt(0, 0, 0);
+  
+  renderer = new THREE.WebGLRenderer({ antialias: true, canvas });
+  renderer.setPixelRatio(window.devicePixelRatio ?? 1);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  
+  // Lighting
+  const ambientLight = new THREE.AmbientLight(0x404040, 0.6);
+  scene.add(ambientLight);
+  
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+  directionalLight.position.set(50, 50, 50);
+  directionalLight.castShadow = true;
+  directionalLight.shadow.mapSize.width = 2048;
+  directionalLight.shadow.mapSize.height = 2048;
+  directionalLight.shadow.camera.near = 0.5;
+  directionalLight.shadow.camera.far = 500;
+  directionalLight.shadow.camera.left = -100;
+  directionalLight.shadow.camera.right = 100;
+  directionalLight.shadow.camera.top = 100;
+  directionalLight.shadow.camera.bottom = -100;
+  scene.add(directionalLight);
+  
+  // Create terrain
+  const terrain = createTerrain();
+  scene.add(terrain);
+  
+  // Add some rocks scattered around
+  addRocks();
+  
+  // Handle window resize
+  window.addEventListener('resize', () => {
+    triggerResize();
+  });
+  
+  // Handle fullscreen changes
+  document.addEventListener('fullscreenchange', () => {
+    setTimeout(() => triggerResize(), 100);
+  });
+  
+  // Mouse controls for camera rotation
+  let isMouseDown = false;
+  let lastMouseX = 0;
+  let lastMouseY = 0;
+  
+  canvas.addEventListener('mousedown', (e) => {
+    isMouseDown = true;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    canvas.style.cursor = 'grabbing';
+  });
+  
+  canvas.addEventListener('mousemove', (e) => {
+    if (isMouseDown) {
+      const deltaX = e.clientX - lastMouseX;
+      const deltaY = e.clientY - lastMouseY;
+      
+      // Rotate camera based on mouse movement
+      camera.rotation.y -= deltaX * 0.002;
+      camera.rotation.x -= deltaY * 0.002;
+      
+      // Limit vertical rotation
+      camera.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, camera.rotation.x));
+      
+      lastMouseX = e.clientX;
+      lastMouseY = e.clientY;
+    }
+  });
+  
+  canvas.addEventListener('mouseup', () => {
+    isMouseDown = false;
+    canvas.style.cursor = 'grab';
+  });
+  
+  canvas.addEventListener('mouseleave', () => {
+    isMouseDown = false;
+    canvas.style.cursor = 'grab';
+  });
+  
+  canvas.style.cursor = 'grab';
+}
+
+// Terrain with mountains for massive world
 function createTerrain(): THREE.Mesh {
-  const size = 200;
-  const segments = 100;
+  const size = 2000; // Match server world size
+  const segments = 200; // Higher detail for larger world
   const geometry = new THREE.PlaneGeometry(size, size, segments, segments);
   
   // Get position attribute
   const positions = geometry.attributes.position;
   if (!positions) return new THREE.Mesh();
   
-  // Create height map with more dramatic terrain
+  // Create height map with more dramatic terrain for massive world
   for (let i = 0; i < positions.count; i++) {
     const x = positions.getX(i);
     const z = positions.getY(i);
@@ -90,32 +840,32 @@ function createTerrain(): THREE.Mesh {
     // Multiple octaves of noise for realistic terrain
     let height = 0;
     
-    // Large rolling hills
-    height += Math.sin(x * 0.03) * Math.cos(z * 0.03) * 8;
-    height += Math.sin(x * 0.05) * Math.cos(z * 0.05) * 5;
+    // Large rolling hills (scaled for massive world)
+    height += Math.sin(x * 0.01) * Math.cos(z * 0.01) * 15;
+    height += Math.sin(x * 0.02) * Math.cos(z * 0.02) * 10;
     
     // Medium hills
+    height += Math.sin(x * 0.05) * Math.cos(z * 0.05) * 5;
     height += Math.sin(x * 0.1) * Math.cos(z * 0.1) * 3;
-    height += Math.sin(x * 0.15) * Math.cos(z * 0.15) * 2;
     
     // Small details
     height += Math.sin(x * 0.2) * Math.cos(z * 0.2) * 1;
     
     // Add dramatic mountain peaks at edges
     const distFromCenter = Math.sqrt(x * x + z * z);
-    if (distFromCenter > 50) {
-      const mountainHeight = (distFromCenter - 50) * 0.3;
+    if (distFromCenter > 500) {
+      const mountainHeight = (distFromCenter - 500) * 0.1;
       height += mountainHeight;
       
       // Add some random peaks
-      if (Math.random() > 0.7) {
+      if (Math.random() > 0.8) {
         height += mountainHeight * 0.5;
       }
     }
     
     // Add some valleys
-    if (Math.abs(x) < 30 && Math.abs(z) < 30) {
-      height -= 2; // Central valley
+    if (Math.abs(x) < 200 && Math.abs(z) < 200) {
+      height -= 3; // Central valley
     }
     
     positions.setZ(i, height);
@@ -137,20 +887,17 @@ function createTerrain(): THREE.Mesh {
   return terrain;
 }
 
-const ground = createTerrain();
-scene.add(ground);
-
 // Add some rocks scattered around
 function addRocks(): void {
   const rockGeometry = new THREE.SphereGeometry(0.5, 8, 6);
   const rockMaterial = new THREE.MeshLambertMaterial({ color: 0x8B4513 });
   
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 50; i++) {
     const rock = new THREE.Mesh(rockGeometry, rockMaterial);
     rock.position.set(
-      (Math.random() - 0.5) * 180,
-      0.5,
-      (Math.random() - 0.5) * 180
+      (Math.random() - 0.5) * 1800, // Scatter across massive world
+      Math.random() * 2,
+      (Math.random() - 0.5) * 1800
     );
     rock.scale.setScalar(Math.random() * 0.5 + 0.5);
     rock.castShadow = true;
@@ -158,726 +905,500 @@ function addRocks(): void {
   }
 }
 
-addRocks();
-
-// Tree materials for different types
-const treeMaterials: Record<TreeType, THREE.MeshLambertMaterial> = {
-  oak: new THREE.MeshLambertMaterial({ color: 0x8B4513 }), // Brown
-  pine: new THREE.MeshLambertMaterial({ color: 0x228B22 }), // Forest green
-  cherry: new THREE.MeshLambertMaterial({ color: 0xFFB6C1 }), // Light pink
-  maple: new THREE.MeshLambertMaterial({ color: 0xFF4500 }), // Orange red
-  cedar: new THREE.MeshLambertMaterial({ color: 0x2F4F4F }) // Dark slate gray
-};
-
-// Tree geometries for different growth stages
-const treeGeometries = [
-  new THREE.SphereGeometry(0.2, 8, 8), // Seed
-  new THREE.ConeGeometry(0.5, 1, 8), // Sapling
-  new THREE.ConeGeometry(1, 2, 8), // Young tree
-  new THREE.ConeGeometry(1.5, 3, 8), // Growing tree
-  new THREE.ConeGeometry(2, 4, 8), // Mature tree
-  new THREE.ConeGeometry(2.5, 5, 8) // Fully grown tree
-];
-
-// Player avatar geometry
-const playerGeometry = new THREE.CylinderGeometry(0.3, 0.3, 1.5, 8);
-const playerMaterial = new THREE.MeshLambertMaterial({ color: 0x4169E1 }); // Royal blue
-
-// Username label system
-const usernameLabels: Map<string, THREE.Object3D> = new Map();
-
-function createUsernameLabel(username: string, playerId: string): THREE.Object3D {
-  const canvas = document.createElement('canvas');
-  const context = canvas.getContext('2d');
-  if (!context) return new THREE.Object3D();
-
-  // Set canvas size
-  canvas.width = 256;
-  canvas.height = 64;
-
-  // Draw username background
-  context.fillStyle = 'rgba(0, 0, 0, 0.8)';
-  context.fillRect(0, 0, canvas.width, canvas.height);
-
-  // Draw username text
-  context.fillStyle = '#FFFFFF';
-  context.font = 'bold 24px Arial';
-  context.textAlign = 'center';
-  context.textBaseline = 'middle';
-  context.fillText(username, canvas.width / 2, canvas.height / 2);
-
-  // Create texture from canvas
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.needsUpdate = true;
-
-  // Create sprite material
-  const spriteMaterial = new THREE.SpriteMaterial({ 
-    map: texture,
-    transparent: true,
-    alphaTest: 0.1
-  });
-
-  // Create sprite
-  const sprite = new THREE.Sprite(spriteMaterial);
-  sprite.scale.set(4, 1, 1);
-  sprite.position.set(0, 2.5, 0);
-  sprite.userData = { playerId, username };
-
-  return sprite;
-}
-
-// Land plot geometry
-const landPlotGeometry = new THREE.PlaneGeometry(10, 10);
-const landPlotMaterial = new THREE.MeshLambertMaterial({ 
-  color: 0x90EE90, 
-  transparent: true, 
-  opacity: 0.3 
-});
-
-// Resize handler
-window.addEventListener('resize', () => {
-  const { innerWidth, innerHeight } = window;
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
-
-// Raycaster for tree interaction
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2();
-
-// Initialize game
+// Fetch initial game state
 async function fetchInitialGameState(): Promise<void> {
   try {
-    const response = await fetch('/api/init');
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    const data = (await response.json()) as InitResponse;
-    if (data.type === 'init') {
-      gameState = data.gameState;
-      currentPostId = data.postId;
-      titleElement.textContent = `Welcome, ${data.username}! 🌳`;
-      
-      // Update biome environment
-      updateBiomeEnvironment(gameState.currentBiome);
-      
-      // Create player avatar
-      createPlayerAvatar();
-      
-      updateUI();
-      renderTrees();
-      renderLandPlots();
-      renderNearbyPlayers(data.nearbyPlayers);
-      renderMinimap();
-      
-      // Initialize chat
-      await loadChatMessages();
-      updateOnlineCount();
-      
-      // Start chat update interval
-      if (chatUpdateInterval) {
-        clearInterval(chatUpdateInterval);
-      }
-      chatUpdateInterval = setInterval(loadChatMessages, 2000); // Update every 2 seconds
-      
-      // Auto-hide UI after 5 seconds to give players time to read instructions
-      setTimeout(() => {
-        if (!uiHidden) {
-          toggleUI();
-        }
-      }, 5000);
-    } else {
-      showMessage('Error loading game state', 'error');
+    console.log('Fetching initial game state...');
+    const response = await fetch('/api/init', {
+      method: 'GET'
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
     }
-  } catch (err) {
-    console.error('Error fetching initial game state:', err);
-    showMessage('Error loading game', 'error');
+    
+    const data: InitResponse = await response.json();
+    console.log('Received game state:', data);
+    gameState = data.gameState;
+    nearbyPlayers = data.nearbyPlayers;
+    
+    // Create player avatar
+    createPlayerAvatar();
+    
+    // Render initial state
+    renderTrees();
+    renderLandPlots();
+    renderNearbyPlayers();
+    renderMinimap();
+    
+    // Load chat messages
+    loadChatMessages();
+    updateOnlineCount();
+    
+    // Set up chat update interval
+    chatUpdateInterval = setInterval(() => {
+      loadChatMessages();
+    }, 2000);
+    
+    // Update UI
+    updateUI();
+    
+    showMessage(`Welcome to the massive world, ${gameAuth?.username || 'Player'}!`, 'success');
+    
+  } catch (error) {
+    console.error('Failed to fetch initial game state:', error);
+    showMessage('Failed to load game. Please refresh the page.', 'error');
   }
-}
-
-// Update biome environment
-function updateBiomeEnvironment(biome: any): void {
-  scene.background = new THREE.Color(biome.environment.skyColor);
-  
-  // Add fog
-  scene.fog = new THREE.Fog(
-    new THREE.Color(biome.environment.fogColor),
-    20,
-    100
-  );
 }
 
 // Create player avatar
 function createPlayerAvatar(): void {
-  if (playerAvatar) {
-    scene.remove(playerAvatar);
-  }
+  if (!gameState || !scene) return;
   
-  playerAvatar = new THREE.Mesh(playerGeometry, playerMaterial);
-  playerAvatar.position.set(0, 1, 0);
+  const geometry = new THREE.CylinderGeometry(0.5, 0.5, 2, 8);
+  const material = new THREE.MeshLambertMaterial({ color: 0x00ff00 });
+  playerAvatar = new THREE.Mesh(geometry, material);
+  
+  playerAvatar.position.set(
+    gameState.player.position.x,
+    gameState.player.position.y + 1,
+    gameState.player.position.z
+  );
+  
   playerAvatar.castShadow = true;
   scene.add(playerAvatar);
+  
+  // Create username label
+  createUsernameLabel(gameAuth?.username || 'Player', playerAvatar.position);
 }
 
-// Update UI elements
-function updateUI(): void {
-  if (!gameState) return;
-
-  // Update resources
-  resourcesElement.innerHTML = `
-    <div class="resource">
-      <span class="resource-icon">🌱</span>
-      <span class="resource-value">${gameState.resources.seeds}</span>
-    </div>
-    <div class="resource">
-      <span class="resource-icon">💧</span>
-      <span class="resource-value">${gameState.resources.water}</span>
-    </div>
-    <div class="resource">
-      <span class="resource-icon">🪙</span>
-      <span class="resource-value">${gameState.resources.coins}</span>
-    </div>
-    <div class="resource">
-      <span class="resource-icon">⭐</span>
-      <span class="resource-value">${gameState.player.experience}</span>
-    </div>
-  `;
-
-  // Update trees count
-  treesElement.innerHTML = `
-    <div class="tree-count">🌲 Trees: ${gameState.trees.length}</div>
-    <div class="level">Level: ${gameState.player.level}</div>
-    <div class="land-count">🏡 Land: ${gameState.player.landPlots.length}</div>
-  `;
-
-  // Update achievements
-  achievementsElement.innerHTML = `
-    <div class="achievements-section">
-      <h3>🏆 Achievements (${gameState.player.achievements.length})</h3>
-      <div class="achievements-list">
-        ${gameState.player.achievements.map(achievement => `
-          <div class="achievement">
-            <span class="achievement-icon">${achievement.icon}</span>
-            <div class="achievement-info">
-              <div class="achievement-name">${achievement.name}</div>
-              <div class="achievement-desc">${achievement.description}</div>
-            </div>
-          </div>
-        `).join('')}
-      </div>
-    </div>
-  `;
-
-  // Update shop
-  shopElement.innerHTML = `
-    <div class="shop-section">
-      <h3>🌱 Buy Seeds</h3>
-      <div class="seed-options">
-        ${(['oak', 'pine', 'cherry', 'maple', 'cedar'] as TreeType[]).map(type => `
-          <button class="seed-btn" data-type="${type}" onclick="buySeeds('${type}')">
-            ${type.charAt(0).toUpperCase() + type.slice(1)} (10🪙)
-          </button>
-        `).join('')}
-      </div>
-    </div>
-    <div class="actions-section">
-      <button class="action-btn" onclick="plantTreeAtPosition()">🌱 Plant Tree</button>
-      <button class="action-btn" onclick="waterAllTrees()">💧 Water All</button>
-      <button class="action-btn" onclick="buyLandAtPosition()">🏡 Buy Land</button>
-    </div>
-  `;
+// Create username label
+function createUsernameLabel(username: string, position: THREE.Vector3): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  if (!context) return new THREE.Sprite();
+  
+  canvas.width = 256;
+  canvas.height = 64;
+  
+  context.fillStyle = 'rgba(0, 0, 0, 0.8)';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  
+  context.fillStyle = 'white';
+  context.font = '24px Arial';
+  context.textAlign = 'center';
+  context.fillText(username, canvas.width / 2, canvas.height / 2 + 8);
+  
+  const texture = new THREE.CanvasTexture(canvas);
+  const spriteMaterial = new THREE.SpriteMaterial({ map: texture });
+  const sprite = new THREE.Sprite(spriteMaterial);
+  
+  sprite.position.set(position.x, position.y + 3, position.z);
+  sprite.scale.set(4, 1, 1);
+  
+  scene.add(sprite);
+  return sprite;
 }
 
-// Render trees in 3D scene
+// Render trees
 function renderTrees(): void {
-  if (!gameState) return;
-
+  if (!gameState || !scene) return;
+  
   // Clear existing trees
   treeMeshes.forEach(mesh => scene.remove(mesh));
-  treeMeshes.clear();
-
-  // Add trees to scene
-  gameState.trees.forEach(tree => {
-    const geometry = treeGeometries[tree.growthStage];
-    const material = treeMaterials[tree.type];
-    const mesh = new THREE.Mesh(geometry, material);
+  treeMeshes = [];
+  
+  gameState.trees.forEach((tree: any) => {
+    let geometry: THREE.BufferGeometry;
     
-    // Calculate height based on geometry type
-    let height = 0;
-    if (geometry instanceof THREE.ConeGeometry) {
-      height = geometry.parameters.height || 1;
-    } else if (geometry instanceof THREE.SphereGeometry) {
-      height = geometry.parameters.radius || 0.5;
+    switch (tree.type) {
+      case 'oak':
+        geometry = new THREE.ConeGeometry(0.5, tree.growthStage * 2, 8);
+        break;
+      case 'pine':
+        geometry = new THREE.ConeGeometry(0.3, tree.growthStage * 1.5, 6);
+        break;
+      case 'cherry':
+        geometry = new THREE.SphereGeometry(tree.growthStage * 0.8, 8, 6);
+        break;
+      default:
+        geometry = new THREE.ConeGeometry(0.4, tree.growthStage * 1.8, 8);
     }
     
-    mesh.position.set(tree.x, tree.y + height / 2, tree.z);
+    const material = new THREE.MeshLambertMaterial({ 
+      color: tree.type === 'oak' ? 0x8B4513 : 
+             tree.type === 'pine' ? 0x228B22 : 
+             tree.type === 'cherry' ? 0xFF69B4 : 0xFFD700
+    });
+    
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(tree.x, tree.y, tree.z);
     mesh.castShadow = true;
-    mesh.userData = { treeId: tree.id, tree };
+    mesh.userData = { tree };
     
     scene.add(mesh);
-    treeMeshes.set(tree.id, mesh);
+    treeMeshes.push(mesh);
   });
 }
 
 // Render land plots
 function renderLandPlots(): void {
-  if (!gameState) return;
-
-  // Clear existing land plots
-  landPlotMeshes.forEach(mesh => scene.remove(mesh));
-  landPlotMeshes.clear();
-
-  // Add land plots to scene
-  gameState.currentBiome.landPlots.forEach(plot => {
-    const mesh = new THREE.Mesh(landPlotGeometry, landPlotMaterial);
-    mesh.position.set(plot.x, 0.01, plot.z);
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.userData = { plotId: plot.id, plot };
+  if (!gameState || !scene) return;
+  
+  gameState.currentBiome.landPlots.forEach((plot: any) => {
+    const geometry = new THREE.PlaneGeometry(10, 20);
+    const material = new THREE.MeshLambertMaterial({ 
+      color: plot.ownerId === gameState!.player.id ? 0x90EE90 : 0xFFB6C1,
+      transparent: true,
+      opacity: 0.3
+    });
     
-    // Color based on ownership
-    if (plot.ownerId === gameState!.player.id) {
-      mesh.material.color = new THREE.Color(0x90EE90); // Light green for owned
-    } else {
-      mesh.material.color = new THREE.Color(0xFFB6C1); // Light pink for others
-    }
+    const mesh = new THREE.Mesh(geometry, material);
+    mesh.position.set(plot.x, 0.1, plot.z);
+    mesh.rotation.x = -Math.PI / 2;
     
     scene.add(mesh);
-    landPlotMeshes.set(plot.id, mesh);
   });
 }
 
 // Render nearby players
-function renderNearbyPlayers(players: Player[]): void {
-  // Clear existing player meshes and labels
-  playerMeshes.forEach(mesh => scene.remove(mesh));
-  playerMeshes.clear();
+function renderNearbyPlayers(): void {
+  if (!gameState || !scene) return;
   
+  // Clear existing player meshes
+  playerMeshes.forEach(mesh => scene.remove(mesh));
+  playerMeshes = [];
+  
+  // Clear existing username labels
   usernameLabels.forEach(label => scene.remove(label));
   usernameLabels.clear();
-
-  // Add player meshes with username labels
-  players.forEach(player => {
-    const mesh = new THREE.Mesh(playerGeometry, playerMaterial.clone());
+  
+  nearbyPlayers.forEach((player: any) => {
+    if (player.id === gameState!.player.id) return; // Skip self
+    
+    const geometry = new THREE.CylinderGeometry(0.5, 0.5, 2, 8);
+    const material = new THREE.MeshLambertMaterial({ color: 0x0000ff });
+    const mesh = new THREE.Mesh(geometry, material);
+    
     mesh.position.set(player.position.x, player.position.y + 1, player.position.z);
-    mesh.material.color = new THREE.Color(0xFF6B6B); // Different color for other players
     mesh.castShadow = true;
-    mesh.userData = { playerId: player.id, player };
     
     scene.add(mesh);
-    playerMeshes.set(player.id, mesh);
+    playerMeshes.push(mesh);
     
-    // Add username label
-    const usernameLabel = createUsernameLabel(player.username, player.id);
-    usernameLabel.position.set(player.position.x, player.position.y + 3, player.position.z);
-    scene.add(usernameLabel);
-    usernameLabels.set(player.id, usernameLabel);
+    // Create username label
+    const label = createUsernameLabel(player.username, mesh.position);
+    usernameLabels.set(player.id, label);
   });
 }
 
-// Render minimap
-function renderMinimap(): void {
-  if (!gameState || !minimapCanvas) return;
-
-  const ctx = minimapCanvas.getContext('2d');
-  if (!ctx) return;
-
-  // Clear canvas
-  ctx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+// Update UI
+function updateUI(): void {
+  if (!gameState) return;
   
-  // Set background
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
-  ctx.fillRect(0, 0, minimapCanvas.width, minimapCanvas.height);
-
-  const mapSize = 200; // Canvas size
-  const worldSize = 200; // World size
-  const scale = mapSize / worldSize;
-
-  // Draw land plots
-  gameState.currentBiome.landPlots.forEach(plot => {
-    const x = (plot.x + worldSize / 2) * scale;
-    const y = (plot.z + worldSize / 2) * scale;
-    const size = 10 * scale;
-
-    ctx.fillStyle = plot.ownerId === gameState!.player.id ? '#90EE90' : '#FFB6C1';
-    ctx.fillRect(x - size/2, y - size/2, size, size);
-    
-    // Draw border
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(x - size/2, y - size/2, size, size);
-  });
-
-  // Draw trees
-  gameState.trees.forEach(tree => {
-    const x = (tree.x + worldSize / 2) * scale;
-    const y = (tree.z + worldSize / 2) * scale;
-    
-    ctx.fillStyle = '#8B4513';
-    ctx.beginPath();
-    ctx.arc(x, y, 2, 0, Math.PI * 2);
-    ctx.fill();
-  });
-
-  // Draw player position
-  if (playerAvatar) {
-    const x = (playerAvatar.position.x + worldSize / 2) * scale;
-    const y = (playerAvatar.position.z + worldSize / 2) * scale;
-    
-    ctx.fillStyle = '#4169E1';
-    ctx.beginPath();
-    ctx.arc(x, y, 3, 0, Math.PI * 2);
-    ctx.fill();
-    
-    // Draw direction indicator
-    ctx.strokeStyle = '#4169E1';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x, y - 8);
-    ctx.stroke();
+  const coinsElement = document.getElementById('coins');
+  const seedsElement = document.getElementById('seeds');
+  const waterElement = document.getElementById('water');
+  const treeCountElement = document.getElementById('tree-count');
+  const levelElement = document.getElementById('level');
+  const achievementsElement = document.getElementById('achievements-list');
+  const shopElement = document.querySelector('.shop');
+  
+  if (coinsElement) coinsElement.textContent = gameState.player.coins.toString();
+  if (seedsElement) seedsElement.textContent = gameState.resources.seeds.toString();
+  if (waterElement) waterElement.textContent = gameState.resources.water.toString();
+  if (treeCountElement) treeCountElement.textContent = gameState.trees.length.toString();
+  if (levelElement) levelElement.textContent = gameState.player.level.toString();
+  
+  // Update achievements
+  if (achievementsElement) {
+    achievementsElement.innerHTML = gameState.player.achievements
+      .map((achievement: any) => `
+        <div class="achievement">
+          <span class="achievement-icon">${achievement.icon}</span>
+          <div class="achievement-info">
+            <div class="achievement-name">${achievement.name}</div>
+            <div class="achievement-desc">${achievement.description}</div>
+          </div>
+        </div>
+      `).join('');
   }
-
-  // Draw other players
-  gameState.currentBiome.players.forEach(player => {
-    if (player.id === gameState!.player.id) return;
-    
-    const x = (player.position.x + worldSize / 2) * scale;
-    const y = (player.position.z + worldSize / 2) * scale;
-    
-    ctx.fillStyle = '#FF6B6B';
-    ctx.beginPath();
-    ctx.arc(x, y, 2, 0, Math.PI * 2);
-    ctx.fill();
-  });
-}
-
-// Toggle UI visibility
-function toggleUI(): void {
-  uiHidden = !uiHidden;
-  const toggleBtn = document.getElementById('ui-toggle-btn') as HTMLButtonElement;
-  const toggleableElements = document.querySelectorAll('.ui-toggleable');
-  const overlay = document.querySelector('.overlay') as HTMLElement;
   
-  if (uiHidden) {
-    // Hide UI elements
-    toggleableElements.forEach(element => {
-      element.classList.add('hidden');
-    });
-    toggleBtn.textContent = '🎮 Show UI';
-    toggleBtn.style.background = 'linear-gradient(135deg, #4CAF50, #66BB6A)';
-    overlay.classList.add('fullscreen');
-  } else {
-    // Show UI elements
-    toggleableElements.forEach(element => {
-      element.classList.remove('hidden');
-    });
-    toggleBtn.textContent = '🎮 Hide UI';
-    toggleBtn.style.background = 'linear-gradient(135deg, #FF6B6B, #FF8E8E)';
-    overlay.classList.remove('fullscreen');
+  // Update shop
+  if (shopElement) {
+    const buySeedsBtn = shopElement.querySelector('button[onclick="buySeeds()"]');
+    const buyWaterBtn = shopElement.querySelector('button[onclick="buyWater()"]');
+    const buyLandBtn = shopElement.querySelector('button[onclick="buyLand()"]');
+    
+    if (buySeedsBtn) buySeedsBtn.textContent = `Buy Seeds (10 coins)`;
+    if (buyWaterBtn) buyWaterBtn.textContent = `Buy Water (5 coins)`;
+    if (buyLandBtn) buyLandBtn.textContent = `Buy Land (100 coins)`;
   }
 }
 
-// Chat system
-let chatMessages: ChatMessage[] = [];
-let chatUpdateInterval: NodeJS.Timeout | null = null;
-
-// Send chat message
-async function sendChatMessage(): Promise<void> {
-  const chatInput = document.getElementById('chat-input') as HTMLInputElement;
-  const message = chatInput.value.trim();
+// Chat functions
+function sendChatMessage(): void {
+  const input = document.getElementById('chat-input') as HTMLInputElement;
+  if (!input || !input.value.trim()) return;
   
-  if (!message || !gameState || !currentPostId) return;
+  const message = input.value.trim();
+  input.value = '';
   
-  try {
-    const response = await fetch('/api/send-chat-message', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        postId: currentPostId,
-        playerId: gameState.player.id,
-        message
-      })
-    });
-    
-    if (response.ok) {
-      chatInput.value = '';
-      await loadChatMessages();
-    } else {
-      showMessage('Failed to send message', 'error');
-    }
-  } catch (err) {
-    console.error('Error sending chat message:', err);
+  fetch('/api/send-chat-message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message })
+  }).catch(error => {
+    console.error('Failed to send chat message:', error);
     showMessage('Failed to send message', 'error');
-  }
+  });
 }
 
-// Load chat messages
-async function loadChatMessages(): Promise<void> {
-  try {
-    const response = await fetch('/api/chat-messages?limit=20');
-    if (response.ok) {
-      const data = await response.json();
+function loadChatMessages(): void {
+  fetch('/api/chat-messages')
+    .then(response => response.json())
+    .then(data => {
       chatMessages = data.messages;
       renderChatMessages();
-    }
-  } catch (err) {
-    console.error('Error loading chat messages:', err);
-  }
+    })
+    .catch(error => console.error('Failed to load chat messages:', error));
 }
 
-// Render chat messages
 function renderChatMessages(): void {
-  const chatMessagesElement = document.getElementById('chat-messages') as HTMLDivElement;
-  if (!chatMessagesElement) return;
+  const container = document.getElementById('chat-messages');
+  if (!container) return;
   
-  chatMessagesElement.innerHTML = '';
+  container.innerHTML = chatMessages
+    .slice(-20) // Show last 20 messages
+    .map(msg => `
+      <div class="chat-message ${msg.playerId === gameState?.player.id ? 'player' : 'other'}">
+        <span class="username">${msg.username}:</span>
+        <span class="message-text">${msg.message}</span>
+        <span class="timestamp">${new Date(msg.timestamp).toLocaleTimeString()}</span>
+      </div>
+    `).join('');
   
-  chatMessages.forEach(msg => {
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `chat-message ${msg.playerId === gameState?.player.id ? 'player' : 'other'}`;
-    
-    const timestamp = new Date(msg.timestamp).toLocaleTimeString();
-    
-    messageDiv.innerHTML = `
-      <span class="username">${msg.username}:</span>
-      <span class="message-text">${msg.message}</span>
-      <span class="timestamp">${timestamp}</span>
-    `;
-    
-    chatMessagesElement.appendChild(messageDiv);
-  });
-  
-  // Scroll to bottom
-  chatMessagesElement.scrollTop = chatMessagesElement.scrollHeight;
+  container.scrollTop = container.scrollHeight;
 }
 
-// Show message to user
-function showMessage(text: string, type: 'success' | 'error' | 'info' = 'info'): void {
-  const messageElement = document.getElementById('message') as HTMLDivElement;
-  if (messageElement) {
-    messageElement.textContent = text;
-    messageElement.className = `message ${type}`;
-    messageElement.style.display = 'block';
-    
-    setTimeout(() => {
-      messageElement.style.display = 'none';
-    }, 3000);
-  }
-}
-
-// Update online count
 function updateOnlineCount(): void {
-  const onlineCountElement = document.getElementById('online-count') as HTMLSpanElement;
-  if (onlineCountElement && gameState) {
-    onlineCountElement.textContent = gameState.currentBiome.players.length.toString();
+  const countElement = document.getElementById('online-count');
+  if (countElement && gameState) {
+    countElement.textContent = `${nearbyPlayers.length + 1} online`;
   }
 }
 
-// Plant tree at current position
-async function plantTreeAtPosition(): Promise<void> {
-  if (!gameState || !currentPostId || !playerAvatar) return;
-
-  const treeTypes: TreeType[] = ['oak', 'pine', 'cherry', 'maple', 'cedar'];
-  const randomType = treeTypes[Math.floor(Math.random() * treeTypes.length)];
-
+// Game action functions
+async function plantTree(x: number, z: number): Promise<void> {
+  if (!gameState) return;
+  
   try {
     const response = await fetch('/api/plant-tree', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        treeType: randomType,
-        x: playerAvatar.position.x,
-        z: playerAvatar.position.z,
-        playerId: gameState.player.id
-      }),
+      body: JSON.stringify({ x, z })
     });
-
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    const data = (await response.json()) as PlantTreeResponse;
     
+    const data: PlantTreeResponse = await response.json();
     if (data.success) {
       gameState = data.gameState;
-      updateUI();
       renderTrees();
-      renderLandPlots();
-      renderMinimap();
-      showMessage(data.message, 'success');
-      
-      // Show achievements if any
-      if (data.achievements && data.achievements.length > 0) {
-        data.achievements.forEach(achievement => {
-          showMessage(`🏆 Achievement Unlocked: ${achievement.name}!`, 'success');
-        });
-      }
+      updateUI();
+      showMessage('Tree planted successfully!', 'success');
     } else {
-      showMessage(data.message, 'error');
+      showMessage(data.message || 'Failed to plant tree', 'error');
     }
-  } catch (err) {
-    console.error('Error planting tree:', err);
+  } catch (error) {
+    console.error('Failed to plant tree:', error);
     showMessage('Failed to plant tree', 'error');
   }
 }
 
-// Buy land at current position
-async function buyLandAtPosition(): Promise<void> {
-  if (!gameState || !currentPostId || !playerAvatar) return;
-
+async function waterTree(treeId: string): Promise<void> {
+  if (!gameState) return;
+  
   try {
-    const response = await fetch('/api/buy-land', {
+    const response = await fetch('/api/water-tree', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        x: playerAvatar.position.x,
-        z: playerAvatar.position.z,
-        playerId: gameState.player.id
-      }),
+      body: JSON.stringify({ treeId })
     });
-
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    const data = (await response.json()) as BuyLandResponse;
     
+    const data: WaterTreeResponse = await response.json();
     if (data.success) {
       gameState = data.gameState;
+      renderTrees();
       updateUI();
-      renderLandPlots();
-      showMessage(data.message, 'success');
-      
-      // Show achievements if any
-      if (data.achievements && data.achievements.length > 0) {
-        data.achievements.forEach(achievement => {
-          showMessage(`🏆 Achievement Unlocked: ${achievement.name}!`, 'success');
-        });
-      }
+      showMessage('Tree watered!', 'success');
     } else {
-      showMessage(data.message, 'error');
+      showMessage(data.message || 'Failed to water tree', 'error');
     }
-  } catch (err) {
-    console.error('Error buying land:', err);
-    showMessage('Failed to buy land', 'error');
+  } catch (error) {
+    console.error('Failed to water tree:', error);
+    showMessage('Failed to water tree', 'error');
   }
 }
 
-// Water all trees
-async function waterAllTrees(): Promise<void> {
-  if (!gameState || !currentPostId) return;
-
-  const treesToWater = gameState.trees.filter(tree => tree.health < 100);
-  if (treesToWater.length === 0) {
-    showMessage('All trees are healthy!', 'info');
-    return;
-  }
-
-  let wateredCount = 0;
-  for (const tree of treesToWater) {
-    if (gameState.resources.water <= 0) break;
+async function harvestTree(treeId: string): Promise<void> {
+  if (!gameState) return;
+  
+  try {
+    const response = await fetch('/api/harvest-tree', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ treeId })
+    });
     
-    try {
-      const response = await fetch('/api/water-tree', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          treeId: tree.id,
-          playerId: gameState.player.id
-        }),
-      });
-
-      if (response.ok) {
-        const data = (await response.json()) as WaterTreeResponse;
-        if (data.success) {
-          gameState = data.gameState;
-          wateredCount++;
-        }
-      }
-    } catch (err) {
-      console.error('Error watering tree:', err);
+    const data: HarvestTreeResponse = await response.json();
+    if (data.rewards) {
+      gameState = data.gameState;
+      renderTrees();
+      updateUI();
+      showMessage(`Harvested tree! +${data.rewards.coins} coins`, 'success');
+    } else {
+      showMessage('Failed to harvest tree', 'error');
     }
+  } catch (error) {
+    console.error('Failed to harvest tree:', error);
+    showMessage('Failed to harvest tree', 'error');
   }
-
-  updateUI();
-  renderTrees();
-  showMessage(`Watered ${wateredCount} trees!`, 'success');
 }
 
-// Buy seeds
-async function buySeeds(treeType: TreeType): Promise<void> {
-  if (!gameState || !currentPostId) return;
-
+async function buySeeds(): Promise<void> {
+  if (!gameState) return;
+  
   try {
     const response = await fetch('/api/buy-seeds', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        treeType, 
-        quantity: 1,
-        playerId: gameState.player.id
-      }),
+      headers: { 'Content-Type': 'application/json' }
     });
-
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    const data = (await response.json()) as BuySeedsResponse;
     
+    const data: BuySeedsResponse = await response.json();
     if (data.success) {
       gameState = data.gameState;
       updateUI();
-      showMessage(data.message, 'success');
+      showMessage('Seeds purchased!', 'success');
     } else {
-      showMessage(data.message, 'error');
+      showMessage(data.message || 'Failed to buy seeds', 'error');
     }
-  } catch (err) {
-    console.error('Error buying seeds:', err);
+  } catch (error) {
+    console.error('Failed to buy seeds:', error);
     showMessage('Failed to buy seeds', 'error');
   }
 }
 
-// Move player
-async function movePlayer(x: number, y: number, z: number): Promise<void> {
-  if (!gameState || !currentPostId || !playerAvatar) return;
+async function buyWater(): Promise<void> {
+  if (!gameState) return;
+  
+  try {
+    const response = await fetch('/api/buy-water', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    const data: BuySeedsResponse = await response.json(); // Use same type as buy seeds
+    if (data.success) {
+      gameState = data.gameState;
+      updateUI();
+      showMessage('Water purchased!', 'success');
+    } else {
+      showMessage(data.message || 'Failed to buy water', 'error');
+    }
+  } catch (error) {
+    console.error('Failed to buy water:', error);
+    showMessage('Failed to buy water', 'error');
+  }
+}
 
+async function buyLand(): Promise<void> {
+  if (!gameState) return;
+  
+  try {
+    const response = await fetch('/api/buy-land', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    
+    const data: BuyLandResponse = await response.json();
+    if (data.success) {
+      gameState = data.gameState;
+      renderLandPlots();
+      updateUI();
+      showMessage('Land purchased!', 'success');
+    } else {
+      showMessage(data.message || 'Failed to buy land', 'error');
+    }
+  } catch (error) {
+    console.error('Failed to buy land:', error);
+    showMessage('Failed to buy land', 'error');
+  }
+}
+
+async function buyLandAtPosition(x: number, z: number): Promise<void> {
+  if (!gameState) return;
+  
+  try {
+    const response = await fetch('/api/buy-land', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ x, z })
+    });
+    
+    const data: BuyLandResponse = await response.json();
+    if (data.success) {
+      gameState = data.gameState;
+      renderLandPlots();
+      updateUI();
+      showMessage('Land purchased!', 'success');
+    } else {
+      showMessage(data.message || 'Failed to buy land', 'error');
+    }
+  } catch (error) {
+    console.error('Failed to buy land:', error);
+    showMessage('Failed to buy land', 'error');
+  }
+}
+
+async function movePlayer(x: number, y: number, z: number): Promise<void> {
+  if (!gameState) return;
+  
   try {
     const response = await fetch('/api/move-player', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        x, y, z,
-        playerId: gameState.player.id
-      }),
+      body: JSON.stringify({ x, y, z })
     });
-
-    if (response.ok) {
-      const data = (await response.json()) as MovePlayerResponse;
+    
+    const data: MovePlayerResponse = await response.json();
+    if (data.gameState) {
       gameState = data.gameState;
-      playerAvatar.position.set(x, y + 1, z);
-      
-      // Update camera to follow player
-      camera.position.set(x, y + 15, z + 25);
-      camera.lookAt(x, y, z);
+      renderNearbyPlayers();
+      updateOnlineCount();
     }
-  } catch (err) {
-    console.error('Error moving player:', err);
+  } catch (error) {
+    console.error('Failed to move player:', error);
   }
 }
 
 // Handle tree clicks
-function handleTreeClick(event: PointerEvent): void {
-  // Check if clicking on UI elements first
-  const target = event.target as HTMLElement;
-  if (target.closest('.shop') || target.closest('.achievements') || target.closest('.resources') || target.closest('.trees-info')) {
-    return; // Don't handle tree clicks when clicking on UI
-  }
-
+function handleTreeClick(event: MouseEvent): void {
+  if (!gameState) return;
+  
+const mouse = new THREE.Vector2();
   mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
   mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
 
+  const raycaster = new THREE.Raycaster();
   raycaster.setFromCamera(mouse, camera);
-  const intersects = raycaster.intersectObjects(Array.from(treeMeshes.values()));
-
-  if (intersects.length > 0 && intersects[0]) {
-    const clickedMesh = intersects[0].object as THREE.Mesh;
-    const userData = clickedMesh.userData;
+  
+  const intersects = raycaster.intersectObjects(treeMeshes);
+  
+  if (intersects.length > 0) {
+    const clickedMesh = intersects[0]?.object as THREE.Mesh;
+    const tree = clickedMesh?.userData?.tree;
     
-    if (userData && userData.tree) {
-      const tree = userData.tree as Tree;
-      
-      if (tree.growthStage >= 5) {
+    if (tree) {
+      if (tree.growthStage >= 3) {
         harvestTree(tree.id);
       } else {
         waterTree(tree.id);
@@ -886,205 +1407,77 @@ function handleTreeClick(event: PointerEvent): void {
   }
 }
 
-// Water individual tree
-async function waterTree(treeId: string): Promise<void> {
-  if (!gameState || !currentPostId) return;
-
-  try {
-    const response = await fetch('/api/water-tree', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        treeId,
-        playerId: gameState.player.id
-      }),
-    });
-
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    const data = (await response.json()) as WaterTreeResponse;
-    
-    if (data.success) {
-      gameState = data.gameState;
-      updateUI();
-      renderTrees();
-      showMessage(data.message, 'success');
-    } else {
-      showMessage(data.message, 'error');
-    }
-  } catch (err) {
-    console.error('Error watering tree:', err);
-    showMessage('Failed to water tree', 'error');
-  }
-}
-
-// Harvest tree
-async function harvestTree(treeId: string): Promise<void> {
-  if (!gameState || !currentPostId) return;
-
-  try {
-    const response = await fetch('/api/harvest-tree', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        treeId,
-        playerId: gameState.player.id
-      }),
-    });
-
-    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-    const data = (await response.json()) as HarvestTreeResponse;
-    
-    gameState = data.gameState;
-    updateUI();
-    renderTrees();
-    
-    if (data.rewards.coins > 0) {
-      showMessage(`Harvested! +${data.rewards.coins}🪙 +${data.rewards.seeds}🌱 +${data.rewards.experience}⭐`, 'success');
-      
-      // Show achievements if any
-      if (data.achievements && data.achievements.length > 0) {
-        data.achievements.forEach(achievement => {
-          showMessage(`🏆 Achievement Unlocked: ${achievement.name}!`, 'success');
-        });
+// Handle canvas clicks
+function handleCanvasClick(event: MouseEvent): void {
+  if (!gameState) return;
+  
+  const mouse = new THREE.Vector2();
+  mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+  mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+  
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(mouse, camera);
+  
+  const intersects = raycaster.intersectObjects(treeMeshes);
+  
+  if (intersects.length > 0) {
+    handleTreeClick(event);
+  } else if (gameState) {
+    // Check if clicking on empty land
+    const groundIntersects = raycaster.intersectObject(scene.getObjectByName('terrain') || new THREE.Object3D());
+    if (groundIntersects.length > 0) {
+      const point = groundIntersects[0]?.point;
+      if (point && gameState.resources.seeds > 0) {
+        plantTree(point.x, point.z);
+      } else {
+        showMessage('You need seeds to plant trees!', 'error');
       }
-    } else {
-      showMessage('Tree not ready for harvest yet!', 'info');
     }
-  } catch (err) {
-    console.error('Error harvesting tree:', err);
-    showMessage('Failed to harvest tree', 'error');
   }
 }
 
-// Keyboard controls
-document.addEventListener('keydown', (event) => {
-  keys[event.key.toLowerCase()] = true;
-  
-  // Toggle UI with Tab key
-  if (event.key === 'Tab') {
-    event.preventDefault();
-    toggleUI();
-  }
-  
-  // Fullscreen with F key
-  if (event.key === 'f' || event.key === 'F') {
-    event.preventDefault();
-    toggleFullscreen();
-  }
-  
-  // Send chat message with Enter key
-  if (event.key === 'Enter') {
-    const chatInput = document.getElementById('chat-input') as HTMLInputElement;
-    if (chatInput && chatInput === document.activeElement) {
-      event.preventDefault();
-      sendChatMessage();
-    }
-  }
-});
-
-document.addEventListener('keyup', (event) => {
-  keys[event.key.toLowerCase()] = false;
-});
-
-// Fullscreen functionality
+// Fullscreen toggle
 function toggleFullscreen(): void {
   if (!document.fullscreenElement) {
-    document.documentElement.requestFullscreen().catch(err => {
-      console.log('Error attempting to enable fullscreen:', err);
-    });
+    document.documentElement.requestFullscreen();
   } else {
     document.exitFullscreen();
   }
+  
+  // Trigger resize after fullscreen change
+  setTimeout(() => triggerResize(), 100);
 }
-
-// Movement system
-function handleMovement(): void {
-  if (!playerAvatar || !gameState) return;
-
-  const moveSpeed = 0.3;
-  let moved = false;
-  let newX = playerAvatar.position.x;
-  let newZ = playerAvatar.position.z;
-
-  if (keys['w'] || keys['arrowup']) {
-    newZ -= moveSpeed;
-    moved = true;
-  }
-  if (keys['s'] || keys['arrowdown']) {
-    newZ += moveSpeed;
-    moved = true;
-  }
-  if (keys['a'] || keys['arrowleft']) {
-    newX -= moveSpeed;
-    moved = true;
-  }
-  if (keys['d'] || keys['arrowright']) {
-    newX += moveSpeed;
-    moved = true;
-  }
-
-  if (moved) {
-    // Keep player within bounds (-90 to 90 for a 200x200 world with padding)
-    newX = Math.max(-90, Math.min(90, newX));
-    newZ = Math.max(-90, Math.min(90, newZ));
-    
-    // Update player position immediately for smooth movement
-    playerAvatar.position.set(newX, 2, newZ);
-    
-    // Update camera to follow player with better angle
-    camera.position.set(newX, 25, newZ + 35);
-    camera.lookAt(newX, 0, newZ);
-    
-    // Throttle server updates to avoid spam
-    movementThrottle++;
-    if (movementThrottle >= 10) { // Update server every 10 frames
-      movementThrottle = 0;
-      movePlayer(newX, 0, newZ);
-    }
-  }
-}
-
-// Animation loop
-function animate(): void {
-  requestAnimationFrame(animate);
-
-  // Handle movement
-  handleMovement();
-
-  // Rotate trees slightly
-  treeMeshes.forEach(mesh => {
-    mesh.rotation.y += 0.01;
-  });
-
-  // Rotate player avatars slightly
-  playerMeshes.forEach(mesh => {
-    mesh.rotation.y += 0.005;
-  });
-
-  if (playerAvatar) {
-    playerAvatar.rotation.y += 0.005;
-  }
-
-  // Update minimap every few frames
-  if (Math.floor(Date.now() / 100) % 3 === 0) {
-    renderMinimap();
-  }
-
-  renderer.render(scene, camera);
-}
-
-// Event listeners
-window.addEventListener('pointerdown', handleTreeClick);
 
 // Make functions globally available for HTML onclick handlers
-(window as any).plantTreeAtPosition = plantTreeAtPosition;
-(window as any).waterAllTrees = waterAllTrees;
 (window as any).buySeeds = buySeeds;
+(window as any).buyWater = buyWater;
+(window as any).buyLand = buyLand;
 (window as any).buyLandAtPosition = buyLandAtPosition;
 (window as any).toggleUI = toggleUI;
 (window as any).toggleFullscreen = toggleFullscreen;
 (window as any).sendChatMessage = sendChatMessage;
 
 // Initialize and start
-void fetchInitialGameState();
+if (typeof window !== 'undefined') {
+  // Check for authentication data from URL parameters (Devvit iframe mode)
+  const urlParams = new URLSearchParams(window.location.search);
+  const user = urlParams.get('user');
+  const auth = urlParams.get('auth');
+  
+  if (user && auth) {
+    // Devvit iframe mode with authentication
+    console.log('Running in Devvit iframe mode with auth:', { user, auth });
+    void initGame({ username: user, authToken: auth });
+  } else if ((window as any).gameAuth) {
+    // Direct authentication object
+    console.log('Running with direct auth object');
+    void initGame((window as any).gameAuth);
+  } else {
+    // Fallback for direct access (development mode)
+    console.log('Running in fallback mode - no authentication');
+    createUI();
+    initThreeJS();
+    void fetchInitialGameState();
 animate();
+  }
+}
